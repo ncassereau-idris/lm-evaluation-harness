@@ -54,6 +54,10 @@ class XQuADEnglish(PromptSourceTask):
         "1.11.0"
     ), "datasets v1.11.0 or later required for SQuAD"
 
+    @property
+    def need_greedy_until(self):
+        return True
+
     def has_training_docs(self):
         return False
 
@@ -191,6 +195,10 @@ class XQuADArabic(PromptSourceTask):
     VERSION = 0
     DATASET_PATH = "xquad"
     DATASET_NAME = "xquad.ar"
+
+    @property
+    def need_greedy_until(self):
+        return True
 
     # HF changed squad on us so we have to make sure we aren't running the old one
     assert version.parse(datasets.__version__) >= version.parse(

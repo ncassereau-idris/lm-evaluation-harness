@@ -73,6 +73,11 @@ class Task(abc.ABC):
         self._training_docs = None
         self._fewshot_docs = None
 
+    @property
+    def need_greedy_until(self):
+        # TODO @thomasw21 task don't naturally require this.
+        return False
+
     def download(
         self,
         data_dir: Optional[str] = None,
@@ -238,6 +243,10 @@ class PromptSourceTask(Task):
         super().__init__(data_dir, cache_dir, download_mode)
         self.prompt_template = prompt_template
         self.save_examples = save_examples
+
+    @property
+    def need_greedy_until(self):
+        return self.prompt_template.get_answer_choices_expr() is None
 
     def stop_sequences(self) -> List[str]:
         """Denote where the generation should end based on the few-shot example
