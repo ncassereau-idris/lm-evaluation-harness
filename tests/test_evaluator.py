@@ -22,9 +22,6 @@ def _ll_fn(requests):
     for ctx, cont in requests:
         if len(ctx) == 0:
             continue
-        # Space convention
-        assert ctx[-1] != " "
-        assert cont[0] == " " or ctx[-1] == "\n"
     res = []
     random.seed(_SEED)
     for _ in requests:
