@@ -695,6 +695,11 @@ class BioTask(PromptSourceTask):
 
 
 class PerplexityTask(PromptSourceTask):
+
+    @property
+    def need_greedy_until(self):
+        return False
+
     def doc_to_text(self, doc: dict) -> str:
         return ""
 
