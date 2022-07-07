@@ -694,7 +694,7 @@ class BioTask(PromptSourceTask):
     SPLIT = None
 
 
-class PerplexityTask:
+class PerplexityTask(PromptSourceTask):
 
     @property
     def need_greedy_until(self):

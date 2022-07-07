@@ -285,6 +285,10 @@ def get_task_dict_promptsource(task_name_list: List[str]):
                 task_name_dict[f"{task_name}+{template_name}"] = get_task(task_name)(
                     prompt_template=prompt_template
                 )
+        elif issubclass(static_task_obj, lm_eval.api.task.PerplexityTask):
+            # This is a task with a null prompt.
+            # Right now, the only use case are `PerplexityTask`s.
+            task_name_dict[f"{task_name}+null"] = static_task_obj()
         elif issubclass(static_task_obj, lm_eval.api.task.PromptSourceTask):
             # Create the proper task name arg for DatasetTemplates.
             sub_task = (
@@ -302,9 +306,7 @@ def get_task_dict_promptsource(task_name_list: List[str]):
                     prompt_template=prompt_template
                 )
         else:
-            # This is a task with a null prompt.
-            # Right now, the only use case are `PerplexityTask`s.
-            task_name_dict[f"{task_name}+null"] = static_task_obj()
+            raise ValueError(f"Unexpected task: {static_task_obj}")
     return task_name_dict
 
 
