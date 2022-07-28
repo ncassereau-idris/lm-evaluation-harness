@@ -108,7 +108,7 @@ class HuggingFaceAutoLM(TokenLM):
         self._max_gen_toks = max_gen_toks
         self._max_length = max_length
         self._config = transformers.AutoConfig.from_pretrained(pretrained)
-
+        
         self.tokenizer = self._create_auto_tokenizer(
             pretrained=pretrained,
             revision=revision,
@@ -117,29 +117,29 @@ class HuggingFaceAutoLM(TokenLM):
         )
         self.tokenizer.model_max_length = self.max_length
 
-        accelerate_kwargs = {}
-        if use_accelerate:
-            accelerate_kwargs = _get_accelerate_args(
-                max_memory_per_gpu, max_cpu_memory, offload_folder
-            )
+        # accelerate_kwargs = {}
+        # if use_accelerate:
+        #     accelerate_kwargs = _get_accelerate_args(
+        #         max_memory_per_gpu, max_cpu_memory, offload_folder
+        #     )
         self.model = self._create_auto_model(
             pretrained=pretrained,
             revision=revision,
             subfolder=subfolder,
             torch_dtype=_get_dtype(dtype, self._config),
-            **accelerate_kwargs,
+            # **accelerate_kwargs,
         )
         self.model.eval()
         torch.set_grad_enabled(False)
 
-        self._device = device
-        if use_accelerate and "lm_head" in self.model.hf_device_map:
-            # `accelerate` can place `lm_head` weights on a different device than
-            # the user specified one so we force `self._device` to be the same as
-            # `lm_head`'s.
-            self._device = self.model.hf_device_map["lm_head"]
-        if not use_accelerate:
-            self.model.to(self._device)
+        # self._device = device
+        # if use_accelerate and "lm_head" in self.model.hf_device_map:
+        #     # `accelerate` can place `lm_head` weights on a different device than
+        #     # the user specified one so we force `self._device` to be the same as
+        #     # `lm_head`'s.
+        #     self._device = self.model.hf_device_map["lm_head"]
+        # if not use_accelerate:
+        #     self.model.to(self._device)
 
     def _create_auto_model(
         self,
@@ -156,9 +156,9 @@ class HuggingFaceAutoLM(TokenLM):
         model = self.AUTO_MODEL_CLASS.from_pretrained(
             pretrained,
             revision=revision + ("/" + subfolder if subfolder is not None else ""),
-            device_map=device_map,
-            max_memory=max_memory,
-            offload_folder=offload_folder,
+            # device_map=device_map,
+            # max_memory=max_memory,
+            # offload_folder=offload_folder,
             torch_dtype=torch_dtype,
         )
         return model
@@ -225,7 +225,7 @@ class HuggingFaceAutoLM(TokenLM):
 
     def tok_encode(self, string: str) -> TokenSequence:
         # TODO: Merge `tok_encode_batch` here.
-        return self.tokenizer.encode(string, add_special_tokens=False)
+        return self.tokenizer(string, add_special_tokens=False)
 
     def tok_encode_batch(self, strings: List[str]) -> TokenSequence:
         return self.tokenizer(
@@ -270,7 +270,7 @@ class HuggingFaceAutoLM(TokenLM):
 
             # Ensure that the context does not encroach into the `space`
             # for the generation.
-            token_context = self.tok_encode_batch(context)
+            # token_context = self.tok_encode_batch(context)
             input_ids = token_context["input_ids"][
                 :, self.max_gen_toks - self.max_length :
             ].to(self.device)
@@ -322,7 +322,7 @@ class AutoCausalLM(HuggingFaceAutoLM):
     def _model_call(
         self, inputs: TokenSequence, labels: Optional[TokenSequence] = None
     ) -> TokenSequence:
-        return self.model(inputs)["logits"]
+        return self.model(**inputs)["logits"]
 
     def _model_generate(
         self, inputs: TokenSequence, max_tokens: int, stop: Optional[List[str]] = None
@@ -360,27 +360,30 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         return self._DEFAULT_MAX_LENGTH
 
     def loglikelihood(
-        self, requests: List[Tuple[str, str]]
+        self,
+        context_inputs,
+        target_inputs,
     ) -> List[Tuple[float, bool]]:
-        new_requests = []
-        for chunk in utils.chunks(requests, self.batch_size):
-            context, continuation = zip(*chunk)
-            # Fill empty contexts with the EOT token.
-            context = [
-                f"{self.eot_token}" if len(text) == 0 else text for text in context
-            ]
-            context_enc = self.tok_encode_batch(context)
-            for key in context_enc:
-                context_enc[key] = context_enc[key][:, -(self.max_length - 1) :]
-            continuation_enc = self.tok_encode_batch(list(continuation))
-            for key in continuation_enc:
-                continuation_enc[key] = continuation_enc[key][
-                    :, -(self.max_length - 1) :
-                ]
-            new_requests.append(
-                ((context, continuation), context_enc, continuation_enc)
-            )
-        return self._loglikelihood_tokens(new_requests)
+        return self._loglikelihood_tokens(context_inputs, target_inputs)
+        # new_requests = []
+        # for chunk in utils.chunks(requests, self.batch_size):
+        #     context, continuation = zip(*chunk)
+        #     # Fill empty contexts with the EOT token.
+        #     context = [
+        #         f"{self.eot_token}" if len(text) == 0 else text for text in context
+        #     ]
+        #     context_enc = self.tok_encode_batch(context)
+        #     for key in context_enc:
+        #         context_enc[key] = context_enc[key][:, -(self.max_length - 1) :]
+        #     continuation_enc = self.tok_encode_batch(list(continuation))
+        #     for key in continuation_enc:
+        #         continuation_enc[key] = continuation_enc[key][
+        #             :, -(self.max_length - 1) :
+        #         ]
+        #     new_requests.append(
+        #         ((context, continuation), context_tokens, continuation_tokens)
+        #     )
+        # return self._loglikelihood_tokens(new_requests)
 
     def loglikelihood_rolling(self, requests: List[Tuple[str, str]]) -> List[float]:
         loglikelihoods = []
@@ -432,38 +435,37 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
 
     def _loglikelihood_tokens(
         self,
-        requests: List[Tuple[Tuple[str, str], TokenSequence, TokenSequence]],
+        context_inputs, # :List[Tuple[Tuple[str, str], TokenSequence, TokenSequence]],
+        target_inputs,
         disable_tqdm: Optional[bool] = False,
     ) -> List[Tuple[float, bool]]:
-        results = []
-        for chunk in tqdm(
-            requests, total=math.ceil(len(requests)), disable=disable_tqdm
-        ):
-            cache_keys, inputs_tokens, targets_tokens = chunk
-            inputs_tokens = inputs_tokens.to(self.device)
-            targets_tokens = targets_tokens.to(self.device)
-            outputs = self._model_call(inputs=inputs_tokens, labels=targets_tokens)
-            log_softmaxes = F.log_softmax(outputs.logits, dim=-1)
+        context_tokens = context_inputs
+        targets_tokens = target_inputs
+        print("inputs", context_tokens['input_ids'])
+        print("targets", targets_tokens['input_ids'])
+        outputs = self._model_call(inputs=context_tokens, labels=targets_tokens)
+        log_softmaxes = F.log_softmax(outputs.logits, dim=-1)
 
-            output_iterator = zip(
-                zip(cache_keys[0], cache_keys[1]),
-                log_softmaxes,
-                targets_tokens["input_ids"],
-                targets_tokens["attention_mask"],
-            )
-            for cache_key, log_softmax, target_tokens, target_mask in output_iterator:
-                length = target_mask.sum()
-                log_softmax = log_softmax[:length]
-                target_tokens = target_tokens[:length]
-                greedy_tokens = log_softmax.argmax(dim=-1)
-                max_equal = (greedy_tokens == target_tokens).all()
-                target_logits = torch.gather(
-                    log_softmax, 1, target_tokens.unsqueeze(-1)
-                ).squeeze(-1)
-                answer = (float(target_logits.sum()), bool(max_equal))
-                results.append(answer)
-                if cache_key is not None:
-                    self.cache_hook.add_partial("loglikelihood", cache_key, answer)
+        output_iterator = zip(
+            log_softmaxes,
+            targets_tokens["input_ids"],
+            targets_tokens["attention_mask"],
+        )
+        results = []
+        for log_softmax, target_tokens, target_mask in output_iterator:
+            length = target_mask.sum()
+            log_softmax = log_softmax[:length]
+            target_tokens = target_tokens[:length]
+            greedy_tokens = log_softmax.argmax(dim=-1)
+            max_equal = (greedy_tokens == target_tokens).all()
+            target_logits = torch.gather(
+                log_softmax, 1, target_tokens.unsqueeze(-1)
+            ).squeeze(-1)
+            print(f"Logprob Per Token: {target_logits}")
+            answer = (float(target_logits.sum()), bool(max_equal))
+            results.append(answer)
+            # if cache_key is not None:
+            #     self.cache_hook.add_partial("loglikelihood", cache_key, answer)
         return results
 
     def _model_call(

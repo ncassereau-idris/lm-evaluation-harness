@@ -3,8 +3,10 @@ import itertools
 import json
 import logging
 import numpy as np
+from requests import request
+import tokenizers
 from tqdm import tqdm
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import lm_eval.models
 import lm_eval.tasks
@@ -12,6 +14,7 @@ import lm_eval.api.metric
 import lm_eval.api.model
 from lm_eval.api.utils import set_seed
 from lm_eval.api.task import Task
+from lm_eval.api.request import Request
 
 
 logger = logging.getLogger(__name__)
@@ -80,6 +83,7 @@ def cli_evaluate(
         model=model,
         tasks=tasks,
         num_fewshot=num_fewshot,
+        batch_size=batch_size,
         limit=limit,
         bootstrap_iters=bootstrap_iters,
         rng=np.random.default_rng(seed),
@@ -99,11 +103,47 @@ def cli_evaluate(
     return results
 
 
+from torch.utils.data import Dataset, DataLoader
+from accelerate import Accelerator 
+from dataclasses import dataclass
+import transformers
+
+class RequestDataset(Dataset):
+    def __init__(self, request_type: str, requests: List[Tuple[str, Request]], model):
+        # self.requests: List[(request_type, list[Request])]
+        assert len({r.request_type for r in requests}) == 1 and request_type == requests[0].request_type
+        self.request_type = request_type  
+        self.requests = requests
+        self.model = model
+
+    def __len__(self):
+        return len(self.requests)
+
+    def __getitem__(self, idx):
+        _, request = self.requests[idx]
+        context, target = request.args
+        # print(self.model.tokenizer(context))
+        context_tokens, target_tokens = self.model.tok_encode(context), self.model.tok_encode(target)
+        return context_tokens, target_tokens
+
+
+class DataCollator:
+    def __init__(self, *args, **kwargs):
+        self.collator = transformers.data.DataCollatorWithPadding(*args, **kwargs)
+
+    def __call__(self, samples):
+        context_tokens, target_tokens = zip(*samples)
+        context_batch = self.collator(list(context_tokens))
+        target_batch = self.collator(list(target_tokens))
+        return context_batch, target_batch
+
+
 def evaluate(
     *,
     model: lm_eval.api.model.LM,
     tasks: List[Task],
     num_fewshot: Optional[int] = 0,
+    batch_size: Optional[int] = 4,
     bootstrap_iters: Optional[int] = 100000,
     limit: Optional[int] = None,
     rng: Optional[np.random.Generator] = np.random.default_rng(),
@@ -187,27 +227,84 @@ def evaluate(
                 )
         # Store the task version.
         versions[task_template_key] = task.VERSION
+    
+    # list(requests.items()) -> List[Tuple[reqtype, List[Request]]]
+
+    # requests is a list of all the language model requests for each doc
+
+    # TODO: flatten requests before putting into the dataset to avoid single blob of 
+    # requests per request type.
+    # TODO: handle and track multiple request types.
+    # flattened_requests = []
+    # for request_type, request_list in requests.items():
+    #     for r in request_list:
+    #         flattened_requests.append((request_type, r))
+
+    # TODO: create other request type datasets
+    requests_datasets = {
+        request_type: RequestDataset(request_type, request_list, model)
+        for request_type, request_list in requests.items()
+    }
+
+    requests_data_loaders = {
+        request_type: DataLoader(
+            dataset, 
+            collate_fn=DataCollator(
+                tokenizer=model.tokenizer,
+                padding=True,
+            ),
+            batch_size=batch_size, 
+            shuffle=False
+        )
+        for request_type, dataset in requests_datasets.items()
+    }
+    # print(list(requests_data_loader)[0])
+
+    accelerator = Accelerator()
+    # TODO: use `prepare`
+    model.model = accelerator.prepare_model(model.model)
+    requests_data_loaders = {
+        request_type: accelerator.prepare_data_loader(dataloader)
+        for request_type, dataloader in requests_data_loaders.items()
+    }
+    # model.model, requests_data_loader = accelerator.prepare(model.model, requests_data_loader)
+    print("="*80)
+    print(accelerator.device)
+    print("="*80)
 
     # All responses for each (task, doc)
     process_response_queue = collections.defaultdict(list)
     # Execute each type of request
-    for reqtype, reqs in requests.items():
-        # TODO: Right now, this code runs multiple separate LM requests for
-        # multiple Requests differing only in index. We could implement some
-        # kind of caching, but that would be more of a band-aid solution. We
-        # could also implement some kind of auto-grouping here; they should
-        # end up next to each other.
-        logger.info(f"\n» Running all `{reqtype}` requests")
-        resps = getattr(model, reqtype)([req.args for req in reqs])
-        resps = [
-            x if req.index is None else x[req.index] for x, req in zip(resps, reqs)
-        ]
-        for resp, (i, task_template_key, doc, doc_id, fewshotex_logging_info) in zip(
-            resps, requests_origin[reqtype]
-        ):
-            process_response_queue[(task_template_key, doc_id)].append(
-                (i, resp, fewshotex_logging_info)
+    # TODO: Add k-datasets/dataloaders for each request type.
+    #       for data_loader in [dataloaders]:
+    for request_type, requests_data_loader in requests_data_loaders.items():
+        for request_batch in requests_data_loader:
+            # TODO: Right now, this code runs multiple separate LM requests for
+            # multiple Requests differing only in index. We could implement some
+            # kind of caching, but that would be more of a band-aid solution. We
+            # could also implement some kind of auto-grouping here; they should
+            # end up next to each other.
+            # TODO: Now we have batches so pass in batches of requests to the models.
+            context_inputs, target_inputs = request_batch
+            logger.info(f"\n» Running all `{request_type}` requests")
+            # TODO: Make sure all requests are the same type for the given `request_type`
+            responses = getattr(model, request_type)(
+                context_inputs,
+                target_inputs,
             )
+            print(responses[0])
+            responses = accelerator.gather(responses)
+            print(responses)
+            # responses = [
+            #     x if req.index is None else x[req.index] for x, req in zip(
+            #         responses, request_batch)
+            # ]
+            for resp, (i, task_template_key, doc, doc_id, fewshotex_logging_info) in zip(
+                responses, requests_origin[request_type]
+            ):
+                process_response_queue[(task_template_key, doc_id)].append(
+                    (i, resp, fewshotex_logging_info)
+                )
 
     # Unpack results and sort back in order and return control to Task
     vals = collections.defaultdict(list)
