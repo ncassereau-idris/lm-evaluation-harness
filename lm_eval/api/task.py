@@ -474,6 +474,7 @@ class PromptSourceTask(Task):
             target = target[0].strip()
             target_idx = answer_choices_list.index(target)
 
+            print("Process Results (results):", results)
             pred = answer_choices_list[np.argmax(results)]
             out = {}
 
