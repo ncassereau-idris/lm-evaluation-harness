@@ -241,7 +241,8 @@ class TokenLM(LM):
         print(f"Context Tokens Shape: {context_inputs['input_ids'].shape}")
         print(f"{'='*40}")
 
-        results = []
+        logprobs_results = []
+        exact_match_results = []
         for i, log_softmax in enumerate(log_softmaxes):
             print("log_softmax:", log_softmax)
             print(f'Logits Shape: {log_softmax.shape}')
@@ -250,17 +251,18 @@ class TokenLM(LM):
             print(f"Target Logits Shape: {target_logits.shape}")
             print(f"Target Tokens Shape: {target_tokens.shape}")
             greedy_tokens = target_logits.argmax(dim=-1)
-            exact_match = bool((greedy_tokens == target_tokens).all())
+            exact_match = (greedy_tokens == target_tokens).all().unsqueeze(0).to(torch.bool)
             target_logits = target_logits.unsqueeze(0)  # shape: [1, seq_len, vocab]
             print(f"Unsqueezed Target Logits Shape: {target_logits.shape}")
             logprob_per_token = torch.gather(target_logits, 2, target_tokens.unsqueeze(-1)).squeeze(-1)
             print(f"Cont tokens: {context_inputs}")
             print(f"Target tokens: {target_tokens}")
             print(f"Logprob Per Token: {logprob_per_token}")
-            logprobs = float(logprob_per_token.sum())
-            results.append((logprobs, exact_match))
+            logprobs = logprob_per_token.sum().unsqueeze(0)
+            logprobs_results.append(logprobs)
+            exact_match_results.append(exact_match)
         print(f"{'='*80}")
-        return results
+        return torch.cat(logprobs_results, dim=0), torch.cat(exact_match_results, dim=0)
         #     for (cache_key, _, _), logits, input, input_len, cont_tokens in zip(
         #         chunk, multi_logits, inputs, input_lens, cont_tokens_list
         #     ):

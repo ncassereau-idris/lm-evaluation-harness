@@ -10,7 +10,7 @@ REQUEST_RETURN_LENGTHS = {
 
 class Request:
     def __init__(
-        self, request_type: str, args: Optional[Any] = None, index: Optional[int] = None
+        self, request_type: str, args: Optional[Any] = None, index: Optional[int] = None, doc_id: int = None
     ):
         if request_type not in REQUEST_RETURN_LENGTHS.keys():
             raise NotImplementedError(
@@ -19,6 +19,7 @@ class Request:
         self.request_type = request_type
         self.args = args
         self.index = index
+        self.doc_id = doc_id
 
     def __iter__(self):
         if REQUEST_RETURN_LENGTHS[self.request_type] is None:

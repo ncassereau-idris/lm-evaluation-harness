@@ -3,8 +3,9 @@ import itertools
 import json
 import logging
 import numpy as np
-from requests import request
 import tokenizers
+import torch
+from requests import request
 from tqdm import tqdm
 from typing import List, Optional, Tuple
 
@@ -109,7 +110,12 @@ from dataclasses import dataclass
 import transformers
 
 class RequestDataset(Dataset):
-    def __init__(self, request_type: str, requests: List[Tuple[str, Request]], model):
+    def __init__(
+        self,
+        request_type: str,
+        requests: List[Tuple[str, Request]],
+        model 
+    ):
         # self.requests: List[(request_type, list[Request])]
         assert len({r.request_type for r in requests}) == 1 and request_type == requests[0].request_type
         self.request_type = request_type  
@@ -124,7 +130,8 @@ class RequestDataset(Dataset):
         context, target = request.args
         # print(self.model.tokenizer(context))
         context_tokens, target_tokens = self.model.tok_encode(context), self.model.tok_encode(target)
-        return context_tokens, target_tokens
+        print(f"REQUEST ATTRIBUTES: {request.request_type} {request.index} {request.doc_id}")
+        return torch.tensor(request.index), torch.tensor(request.doc_id), context_tokens, target_tokens
 
 
 class DataCollator:
@@ -219,9 +226,18 @@ def evaluate(
             if not isinstance(reqs, (list, tuple)):
                 reqs = [reqs]
             for i, req in enumerate(reqs):
+                # print("req:", req)
+                # print("i:", i)
+                # print("doc id:", doc["doc_id"])
+                req.doc_id = doc["doc_id"]
                 requests[req.request_type].append(req)
                 # i: Index in requests for a single task instance
                 # doc_id: Unique id that we can get back to a doc using `docs`
+                if req.request_type in requests_origin:
+                    req.index = len(requests_origin[req.request_type])
+                else:
+                    req.index = 0
+                # print("req index:", req.index)
                 requests_origin[req.request_type].append(
                     (i, task_template_key, doc, doc_id, fewshotex_logging_info)
                 )
@@ -285,25 +301,30 @@ def evaluate(
             # could also implement some kind of auto-grouping here; they should
             # end up next to each other.
             # TODO: Now we have batches so pass in batches of requests to the models.
-            context_inputs, target_inputs = request_batch
+            indexes, doc_ids, context_inputs, target_inputs = request_batch
             logger.info(f"\n» Running all `{request_type}` requests")
             # TODO: Make sure all requests are the same type for the given `request_type`
-            responses = getattr(model, request_type)(
+            results = getattr(model, request_type)(
                 context_inputs,
                 target_inputs,
             )
-            print(responses[0])
-            responses = accelerator.gather(responses)
-            print(responses)
+            print(f"logprobs results: {results[0]}")
+            print(f"exact match results: {results[1]}")
+            results = accelerator.gather(results)
+            print("Gathered response", results)
+
+            results = zip((results[0].cpu(), results[1].cpu()))
+
             # responses = [
             #     x if req.index is None else x[req.index] for x, req in zip(
             #         responses, request_batch)
             # ]
-            for resp, (i, task_template_key, doc, doc_id, fewshotex_logging_info) in zip(
-                responses, requests_origin[request_type]
-            ):
+            for index, doc_id, result in zip(indexes, doc_ids, results):
+                (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info) = \
+                    requests_origin[request_type][index]
+                assert index == i and doc_id == origin_doc_id
                 process_response_queue[(task_template_key, doc_id)].append(
-                    (i, resp, fewshotex_logging_info)
+                    (i, result, fewshotex_logging_info)
                 )
 
     # Unpack results and sort back in order and return control to Task
