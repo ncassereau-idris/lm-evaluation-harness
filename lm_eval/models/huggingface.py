@@ -439,6 +439,10 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         target_inputs,
         disable_tqdm: Optional[bool] = False,
     ) -> List[Tuple[float, bool]]:
+        """
+        TODO:
+        - Add check to see if the tokenizer applies a start of seq token.
+        """
         context_tokens = context_inputs
         targets_tokens = target_inputs
         print("inputs", context_tokens['input_ids'])

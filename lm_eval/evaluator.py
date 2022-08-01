@@ -10,6 +10,7 @@ from tqdm import tqdm
 from typing import List, Optional, Tuple
 
 import lm_eval.models
+from lm_eval.models import huggingface
 import lm_eval.tasks
 import lm_eval.api.metric
 import lm_eval.api.model
@@ -120,6 +121,7 @@ class RequestDataset(Dataset):
         assert len({r.request_type for r in requests}) == 1 and request_type == requests[0].request_type
         self.request_type = request_type  
         self.requests = requests
+        print('request:', self.requests[0][1])
         self.model = model
 
     def __len__(self):
@@ -127,23 +129,35 @@ class RequestDataset(Dataset):
 
     def __getitem__(self, idx):
         _, request = self.requests[idx]
+        print('request[idx]:', self.requests[idx][1].doc_id)
         context, target = request.args
-        # print(self.model.tokenizer(context))
+        # if isinstance(self.model, huggingface.AutoSeq2SeqLM):
+        #     self.model.model.pad_token_id
+        decoder_inputs = context + target
+        decoder_input_tokens = self.model.tok_encode(decoder_inputs)
+        print(decoder_input_tokens)
         context_tokens, target_tokens = self.model.tok_encode(context), self.model.tok_encode(target)
         print(f"REQUEST ATTRIBUTES: {request.request_type} {request.index} {request.doc_id}")
-        return torch.tensor(request.index), torch.tensor(request.doc_id), context_tokens, target_tokens
-
+        return (
+            torch.tensor([request.index]),
+            torch.tensor([request.unique_request_id]), 
+            torch.tensor([request.doc_id]), 
+            context_tokens, target_tokens,
+            decoder_input_tokens
+        )
 
 class DataCollator:
     def __init__(self, *args, **kwargs):
         self.collator = transformers.data.DataCollatorWithPadding(*args, **kwargs)
 
     def __call__(self, samples):
-        context_tokens, target_tokens = zip(*samples)
+        index_batch, unique_request_id_batch, doc_id_batch, context_tokens, target_tokens, decoder_input_tokens = zip(*samples)
         context_batch = self.collator(list(context_tokens))
         target_batch = self.collator(list(target_tokens))
-        return context_batch, target_batch
-
+        decoder_tokens_batch = self.collator(list(decoder_input_tokens))
+        print(f"Decoder_BATCH: {decoder_tokens_batch['input_ids'][2]}")
+        print(f"Decoder_MASK_BATCH: {decoder_tokens_batch['attention_mask'][2]}")
+        return index_batch, unique_request_id_batch, doc_id_batch, context_batch, target_batch, decoder_tokens_batch
 
 def evaluate(
     *,
@@ -214,6 +228,8 @@ def evaluate(
         for doc_id, doc in enumerate(
             tqdm(itertools.islice(task_docs, 0, limit), total=pbar_limit)
         ):
+            print(doc_id, doc['doc_id'])
+            # assert doc_id == doc['doc_id']
             docs[(task_template_key, doc_id)] = doc
             ctx, fewshotex_logging_info = task.fewshot_context(
                 doc=doc,
@@ -226,18 +242,11 @@ def evaluate(
             if not isinstance(reqs, (list, tuple)):
                 reqs = [reqs]
             for i, req in enumerate(reqs):
-                # print("req:", req)
-                # print("i:", i)
-                # print("doc id:", doc["doc_id"])
-                req.doc_id = doc["doc_id"]
+                req.doc_id = doc_id
+                req.unique_request_id = len(requests_origin[req.request_type])
                 requests[req.request_type].append(req)
                 # i: Index in requests for a single task instance
                 # doc_id: Unique id that we can get back to a doc using `docs`
-                if req.request_type in requests_origin:
-                    req.index = len(requests_origin[req.request_type])
-                else:
-                    req.index = 0
-                # print("req index:", req.index)
                 requests_origin[req.request_type].append(
                     (i, task_template_key, doc, doc_id, fewshotex_logging_info)
                 )
@@ -257,6 +266,8 @@ def evaluate(
     #         flattened_requests.append((request_type, r))
 
     # TODO: create other request type datasets
+
+    print(requests['loglikelihood'][0].doc_id)
     requests_datasets = {
         request_type: RequestDataset(request_type, request_list, model)
         for request_type, request_list in requests.items()
@@ -301,29 +312,30 @@ def evaluate(
             # could also implement some kind of auto-grouping here; they should
             # end up next to each other.
             # TODO: Now we have batches so pass in batches of requests to the models.
-            indexes, doc_ids, context_inputs, target_inputs = request_batch
+            _, unique_request_ids, doc_ids, context_inputs, target_inputs, decoder_inputs = request_batch
             logger.info(f"\n» Running all `{request_type}` requests")
             # TODO: Make sure all requests are the same type for the given `request_type`
             results = getattr(model, request_type)(
                 context_inputs,
                 target_inputs,
+                decoder_inputs
             )
             print(f"logprobs results: {results[0]}")
             print(f"exact match results: {results[1]}")
-            results = accelerator.gather(results)
+            # results = accelerator.gather(results)
             print("Gathered response", results)
-
-            results = zip((results[0].cpu(), results[1].cpu()))
-
-            # responses = [
-            #     x if req.index is None else x[req.index] for x, req in zip(
-            #         responses, request_batch)
-            # ]
-            for index, doc_id, result in zip(indexes, doc_ids, results):
+            results = [
+                x if req.index is None else x[req.index] for x, req in zip(
+                    results, request_batch)
+            ]
+            for unique_request_id, doc_id, result in zip(unique_request_ids, doc_ids, results):
                 (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info) = \
-                    requests_origin[request_type][index]
-                assert index == i and doc_id == origin_doc_id
-                process_response_queue[(task_template_key, doc_id)].append(
+                    requests_origin[request_type][unique_request_id]
+                print("doc_id", doc_id)
+                print("origin_doc_id", origin_doc_id)
+                print("result", result)
+                assert doc_id == origin_doc_id
+                process_response_queue[(task_template_key, int(doc_id))].append(
                     (i, result, fewshotex_logging_info)
                 )
 
@@ -338,6 +350,7 @@ def evaluate(
         task = task_dict[task_template_key]
         doc = docs[(task_template_key, doc_id)]
 
+        print(per_doc_results)
         output = task.process_results(doc, per_doc_results)
 
         if task.save_examples:
