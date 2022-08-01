@@ -236,7 +236,8 @@ class TokenLM(LM):
         # print(batched_inputs['input_ids'].device)
         log_softmaxes = F.log_softmax(
             # shape: [batch, seq_len]
-            self._model_call(batched_inputs)
+            self._model_call(batched_inputs),
+            dim=-1
         )  # [batch, padding_length, vocab]
         # multi_logits = accelerate. 
         print(f"{'='*80}")
@@ -263,8 +264,8 @@ class TokenLM(LM):
             print(f"Target tokens: {target_tokens}")
             print(f"Logprob Per Token: {logprob_per_token}")
             logprobs = logprob_per_token.sum().unsqueeze(0)
-            logprobs_results.append(logprobs)
-            exact_match_results.append(exact_match)
+            logprobs_results.append(logprobs.cpu())
+            exact_match_results.append(exact_match.cpu())
         print(f"{'='*80}")
         return torch.cat(logprobs_results, dim=0), torch.cat(exact_match_results, dim=0)
         #     for (cache_key, _, _), logits, input, input_len, cont_tokens in zip(

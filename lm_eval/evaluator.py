@@ -155,8 +155,6 @@ class DataCollator:
         context_batch = self.collator(list(context_tokens))
         target_batch = self.collator(list(target_tokens))
         decoder_tokens_batch = self.collator(list(decoder_input_tokens))
-        print(f"Decoder_BATCH: {decoder_tokens_batch['input_ids'][2]}")
-        print(f"Decoder_MASK_BATCH: {decoder_tokens_batch['attention_mask'][2]}")
         return index_batch, unique_request_id_batch, doc_id_batch, context_batch, target_batch, decoder_tokens_batch
 
 def evaluate(
@@ -247,8 +245,9 @@ def evaluate(
                 requests[req.request_type].append(req)
                 # i: Index in requests for a single task instance
                 # doc_id: Unique id that we can get back to a doc using `docs`
+                request_return_index = req.index
                 requests_origin[req.request_type].append(
-                    (i, task_template_key, doc, doc_id, fewshotex_logging_info)
+                    (i, task_template_key, doc, doc_id, fewshotex_logging_info, request_return_index)
                 )
         # Store the task version.
         versions[task_template_key] = task.VERSION
@@ -312,33 +311,38 @@ def evaluate(
             # could also implement some kind of auto-grouping here; they should
             # end up next to each other.
             # TODO: Now we have batches so pass in batches of requests to the models.
-            _, unique_request_ids, doc_ids, context_inputs, target_inputs, decoder_inputs = request_batch
+            request_indices, unique_request_ids, doc_ids, context_inputs, target_inputs, decoder_inputs = request_batch
             logger.info(f"\n» Running all `{request_type}` requests")
             # TODO: Make sure all requests are the same type for the given `request_type`
-            results = getattr(model, request_type)(
+            responses = getattr(model, request_type)(
                 context_inputs,
                 target_inputs,
                 decoder_inputs
             )
-            print(f"logprobs results: {results[0]}")
-            print(f"exact match results: {results[1]}")
-            # results = accelerator.gather(results)
-            print("Gathered response", results)
-            results = [
-                x if req.index is None else x[req.index] for x, req in zip(
-                    results, request_batch)
-            ]
-            for unique_request_id, doc_id, result in zip(unique_request_ids, doc_ids, results):
-                (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info) = \
+            print(f'responses len: {len(responses)}')
+            print(f"logprobs responses: {responses[0]}")
+            print(f"exact match responses: {responses[1]}")
+            # responses = accelerator.gather(responses)
+            print("response", len(responses[0].cpu()))
+            if len(responses) > 1:
+                responses = list(zip(*responses))
+            print('zip responses', list(responses)[0])
+            # results = [
+            #     x if req.index is None else x[req.index] for x, req in zip(
+            #         results, request_batch)
+            # ]
+            for unique_request_id, doc_id, response in zip(unique_request_ids, doc_ids, responses):
+                (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info, request_return_index) = \
                     requests_origin[request_type][unique_request_id]
                 print("doc_id", doc_id)
                 print("origin_doc_id", origin_doc_id)
-                print("result", result)
+                print("result", response)
                 assert doc_id == origin_doc_id
+                response = response[request_return_index] if request_return_index else response
                 process_response_queue[(task_template_key, int(doc_id))].append(
-                    (i, result, fewshotex_logging_info)
+                    (i, response, fewshotex_logging_info)
                 )
-
+    print('process response len', sum([len(x) for x in process_response_queue.values()]))
     # Unpack results and sort back in order and return control to Task
     vals = collections.defaultdict(list)
     example_logger = logging.getLogger("examples")

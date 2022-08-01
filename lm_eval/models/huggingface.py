@@ -363,6 +363,7 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         self,
         context_inputs,
         target_inputs,
+        decoder_inputs,
     ) -> List[Tuple[float, bool]]:
         return self._loglikelihood_tokens(context_inputs, target_inputs)
         # new_requests = []
@@ -437,6 +438,7 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         self,
         context_inputs, # :List[Tuple[Tuple[str, str], TokenSequence, TokenSequence]],
         target_inputs,
+        decoder_inputs,
         disable_tqdm: Optional[bool] = False,
     ) -> List[Tuple[float, bool]]:
         """
