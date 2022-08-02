@@ -135,7 +135,12 @@ class RequestDataset(Dataset):
         #     self.model.model.pad_token_id
         decoder_inputs = context + target
         decoder_input_tokens = self.model.tok_encode(decoder_inputs)
-        print(decoder_input_tokens)
+        decoder_input_ids = decoder_input_tokens['input_ids'][:-1]
+        decoder_attention_mask = decoder_input_tokens['attention_mask'][:-1]
+        decoder_inputs = {
+            'input_ids': decoder_input_ids,
+            'attention_mask': decoder_attention_mask,
+        }
         context_tokens, target_tokens = self.model.tok_encode(context), self.model.tok_encode(target)
         print(f"REQUEST ATTRIBUTES: {request.request_type} {request.index} {request.doc_id}")
         return (
@@ -334,11 +339,10 @@ def evaluate(
             for unique_request_id, doc_id, response in zip(unique_request_ids, doc_ids, responses):
                 (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info, request_return_index) = \
                     requests_origin[request_type][unique_request_id]
-                print("doc_id", doc_id)
-                print("origin_doc_id", origin_doc_id)
-                print("result", response)
                 assert doc_id == origin_doc_id
-                response = response[request_return_index] if request_return_index else response
+                print('request return index', request_return_index)
+                print('response return', response[request_return_index])
+                response = response[request_return_index] if request_return_index is not None else response
                 process_response_queue[(task_template_key, int(doc_id))].append(
                     (i, response, fewshotex_logging_info)
                 )
@@ -349,6 +353,7 @@ def evaluate(
     for (task_template_key, doc_id), per_doc_requests in process_response_queue.items():
         per_doc_requests.sort(key=lambda x: x[0])
         per_doc_results = [x[1] for x in per_doc_requests]
+        print(f'Length of per doc results: {len(per_doc_results)}')
         fewshot_logging_info = [x[2] for x in per_doc_requests][0]
 
         task = task_dict[task_template_key]

@@ -316,7 +316,8 @@ class AutoCausalLM(HuggingFaceAutoLM):
             subfolder=subfolder,
             tokenizer=tokenizer,
         )
-        tokenizer.padding_side = "left"
+        # TODO: NEED TO PAD LEFT FOR BATCH GENERATION.
+        tokenizer.padding_side = "right"
         return tokenizer
 
     def _model_call(
@@ -366,25 +367,6 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         decoder_inputs,
     ) -> List[Tuple[float, bool]]:
         return self._loglikelihood_tokens(context_inputs, target_inputs)
-        # new_requests = []
-        # for chunk in utils.chunks(requests, self.batch_size):
-        #     context, continuation = zip(*chunk)
-        #     # Fill empty contexts with the EOT token.
-        #     context = [
-        #         f"{self.eot_token}" if len(text) == 0 else text for text in context
-        #     ]
-        #     context_enc = self.tok_encode_batch(context)
-        #     for key in context_enc:
-        #         context_enc[key] = context_enc[key][:, -(self.max_length - 1) :]
-        #     continuation_enc = self.tok_encode_batch(list(continuation))
-        #     for key in continuation_enc:
-        #         continuation_enc[key] = continuation_enc[key][
-        #             :, -(self.max_length - 1) :
-        #         ]
-        #     new_requests.append(
-        #         ((context, continuation), context_tokens, continuation_tokens)
-        #     )
-        # return self._loglikelihood_tokens(new_requests)
 
     def loglikelihood_rolling(self, requests: List[Tuple[str, str]]) -> List[float]:
         loglikelihoods = []
