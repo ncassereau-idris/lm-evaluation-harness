@@ -366,7 +366,7 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         target_inputs,
         decoder_inputs,
     ) -> List[Tuple[float, bool]]:
-        return self._loglikelihood_tokens(context_inputs, target_inputs)
+        return self._loglikelihood_tokens(context_inputs, target_inputs, decoder_inputs)
 
     def loglikelihood_rolling(self, requests: List[Tuple[str, str]]) -> List[float]:
         loglikelihoods = []
@@ -432,6 +432,7 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         print("inputs", context_tokens['input_ids'])
         print("targets", targets_tokens['input_ids'])
         outputs = self._model_call(inputs=context_tokens, labels=targets_tokens)
+        print('logits shape', outputs.logits.shape)
         log_softmaxes = F.log_softmax(outputs.logits, dim=-1)
 
         output_iterator = zip(
@@ -439,17 +440,21 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
             targets_tokens["input_ids"],
             targets_tokens["attention_mask"],
         )
+        
         results = []
         for log_softmax, target_tokens, target_mask in output_iterator:
             length = target_mask.sum()
+            print('target length:', length)
+            print('log-softmax shape:', log_softmax.shape)
             log_softmax = log_softmax[:length]
+            print('truncated log-softmax shape:', log_softmax.shape)
+            print('target tokens', target_tokens)
             target_tokens = target_tokens[:length]
             greedy_tokens = log_softmax.argmax(dim=-1)
             max_equal = (greedy_tokens == target_tokens).all()
             target_logits = torch.gather(
                 log_softmax, 1, target_tokens.unsqueeze(-1)
             ).squeeze(-1)
-            print(f"Logprob Per Token: {target_logits}")
             answer = (float(target_logits.sum()), bool(max_equal))
             results.append(answer)
             # if cache_key is not None:

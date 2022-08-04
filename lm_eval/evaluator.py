@@ -81,7 +81,7 @@ def cli_evaluate(
         cache_location = f"lm_cache/{model_api_name}_{cache_args}.db"
         model = lm_eval.api.model.CachingLM(model, cache_location)
 
-    results = evaluate(
+    results, is_main_process = evaluate(
         model=model,
         tasks=tasks,
         num_fewshot=num_fewshot,
@@ -102,7 +102,7 @@ def cli_evaluate(
         "limit": limit,
         "bootstrap_iters": bootstrap_iters,
     }
-    return results
+    return results, is_main_process
 
 
 from torch.utils.data import Dataset, DataLoader
@@ -121,7 +121,6 @@ class RequestDataset(Dataset):
         assert len({r.request_type for r in requests}) == 1 and request_type == requests[0].request_type
         self.request_type = request_type  
         self.requests = requests
-        print('request:', self.requests[0][1])
         self.model = model
 
     def __len__(self):
@@ -129,20 +128,16 @@ class RequestDataset(Dataset):
 
     def __getitem__(self, idx):
         _, request = self.requests[idx]
-        print('request[idx]:', self.requests[idx][1].doc_id)
         context, target = request.args
-        # if isinstance(self.model, huggingface.AutoSeq2SeqLM):
-        #     self.model.model.pad_token_id
         decoder_inputs = context + target
         decoder_input_tokens = self.model.tok_encode(decoder_inputs)
-        decoder_input_ids = decoder_input_tokens['input_ids'][:-1]
-        decoder_attention_mask = decoder_input_tokens['attention_mask'][:-1]
+        decoder_input_ids = decoder_input_tokens['input_ids'][:-1][-self.model.max_length:]
+        decoder_attention_mask = decoder_input_tokens['attention_mask'][:-1][-self.model.max_length:]
         decoder_inputs = {
             'input_ids': decoder_input_ids,
             'attention_mask': decoder_attention_mask,
         }
         context_tokens, target_tokens = self.model.tok_encode(context), self.model.tok_encode(target)
-        print(f"REQUEST ATTRIBUTES: {request.request_type} {request.index} {request.doc_id}")
         return (
             torch.tensor([request.index]),
             torch.tensor([request.unique_request_id]), 
@@ -160,14 +155,18 @@ class DataCollator:
         context_batch = self.collator(list(context_tokens))
         target_batch = self.collator(list(target_tokens))
         decoder_tokens_batch = self.collator(list(decoder_input_tokens))
-        return index_batch, unique_request_id_batch, doc_id_batch, context_batch, target_batch, decoder_tokens_batch
+        return (torch.cat(index_batch, dim=0),
+            torch.cat(unique_request_id_batch, dim=0),
+            torch.cat(doc_id_batch, dim=0),
+            context_batch, target_batch, decoder_tokens_batch
+        )
 
 def evaluate(
     *,
     model: lm_eval.api.model.LM,
     tasks: List[Task],
     num_fewshot: Optional[int] = 0,
-    batch_size: Optional[int] = 4,
+    batch_size: Optional[int] = None,
     bootstrap_iters: Optional[int] = 100000,
     limit: Optional[int] = None,
     rng: Optional[np.random.Generator] = np.random.default_rng(),
@@ -231,7 +230,6 @@ def evaluate(
         for doc_id, doc in enumerate(
             tqdm(itertools.islice(task_docs, 0, limit), total=pbar_limit)
         ):
-            print(doc_id, doc['doc_id'])
             # assert doc_id == doc['doc_id']
             docs[(task_template_key, doc_id)] = doc
             ctx, fewshotex_logging_info = task.fewshot_context(
@@ -271,7 +269,6 @@ def evaluate(
 
     # TODO: create other request type datasets
 
-    print(requests['loglikelihood'][0].doc_id)
     requests_datasets = {
         request_type: RequestDataset(request_type, request_list, model)
         for request_type, request_list in requests.items()
@@ -289,7 +286,6 @@ def evaluate(
         )
         for request_type, dataset in requests_datasets.items()
     }
-    # print(list(requests_data_loader)[0])
 
     accelerator = Accelerator()
     # TODO: use `prepare`
@@ -299,9 +295,6 @@ def evaluate(
         for request_type, dataloader in requests_data_loaders.items()
     }
     # model.model, requests_data_loader = accelerator.prepare(model.model, requests_data_loader)
-    print("="*80)
-    print(accelerator.device)
-    print("="*80)
 
     # All responses for each (task, doc)
     process_response_queue = collections.defaultdict(list)
@@ -309,14 +302,16 @@ def evaluate(
     # TODO: Add k-datasets/dataloaders for each request type.
     #       for data_loader in [dataloaders]:
     for request_type, requests_data_loader in requests_data_loaders.items():
-        for request_batch in requests_data_loader:
+        samples_seen = 0
+        for step, request_batch in enumerate(requests_data_loader):
             # TODO: Right now, this code runs multiple separate LM requests for
             # multiple Requests differing only in index. We could implement some
             # kind of caching, but that would be more of a band-aid solution. We
             # could also implement some kind of auto-grouping here; they should
             # end up next to each other.
             # TODO: Now we have batches so pass in batches of requests to the models.
-            request_indices, unique_request_ids, doc_ids, context_inputs, target_inputs, decoder_inputs = request_batch
+            _, unique_request_ids, doc_ids, context_inputs, target_inputs, decoder_inputs = request_batch
+            # print('batch size:', len(request_indices))
             logger.info(f"\n» Running all `{request_type}` requests")
             # TODO: Make sure all requests are the same type for the given `request_type`
             responses = getattr(model, request_type)(
@@ -324,14 +319,22 @@ def evaluate(
                 target_inputs,
                 decoder_inputs
             )
-            print(f'responses len: {len(responses)}')
-            print(f"logprobs responses: {responses[0]}")
-            print(f"exact match responses: {responses[1]}")
-            # responses = accelerator.gather(responses)
-            print("response", len(responses[0].cpu()))
+
+            if accelerator.use_distributed:
+                doc_ids = accelerator.gather(doc_ids.squeeze())
+                unique_request_ids = accelerator.gather(unique_request_ids.squeeze())
+                responses = accelerator.gather(responses[0]), accelerator.gather(responses[1])
+                if step == len(requests_data_loader) - 1:
+                    # Last batch needs to be truncated on distributed systems as it contains additional samples
+                    responses = responses[: len(requests_data_loader.dataset) - samples_seen]
+                else:
+                    # Otherwise we add the number of samples seen
+                    samples_seen += len(responses)
+            
             if len(responses) > 1:
-                responses = list(zip(*responses))
-            print('zip responses', list(responses)[0])
+                responses = list(zip(*responses))  # Tuple 
+
+                # list(zip(*responses, doc_ids, unique_request_ids))
             # results = [
             #     x if req.index is None else x[req.index] for x, req in zip(
             #         results, request_batch)
@@ -339,27 +342,33 @@ def evaluate(
             for unique_request_id, doc_id, response in zip(unique_request_ids, doc_ids, responses):
                 (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info, request_return_index) = \
                     requests_origin[request_type][unique_request_id]
+                                
                 assert doc_id == origin_doc_id
-                print('request return index', request_return_index)
-                print('response return', response[request_return_index])
                 response = response[request_return_index] if request_return_index is not None else response
+                if isinstance(response, torch.Tensor):
+                    response = response.cpu()
+
                 process_response_queue[(task_template_key, int(doc_id))].append(
-                    (i, response, fewshotex_logging_info)
+                    (i, response, fewshotex_logging_info, unique_request_id)
                 )
-    print('process response len', sum([len(x) for x in process_response_queue.values()]))
     # Unpack results and sort back in order and return control to Task
     vals = collections.defaultdict(list)
     example_logger = logging.getLogger("examples")
     for (task_template_key, doc_id), per_doc_requests in process_response_queue.items():
+        unique_request_ids = set()
+        filtered_per_doc_requests = []
+        for per_doc_request in per_doc_requests:
+            if per_doc_request[-1].item() not in unique_request_ids:
+                filtered_per_doc_requests.append(per_doc_request)
+                unique_request_ids.add(per_doc_request[-1].item())
+        per_doc_requests = filtered_per_doc_requests
         per_doc_requests.sort(key=lambda x: x[0])
         per_doc_results = [x[1] for x in per_doc_requests]
-        print(f'Length of per doc results: {len(per_doc_results)}')
         fewshot_logging_info = [x[2] for x in per_doc_requests][0]
 
         task = task_dict[task_template_key]
         doc = docs[(task_template_key, doc_id)]
 
-        print(per_doc_results)
         output = task.process_results(doc, per_doc_results)
 
         if task.save_examples:
@@ -407,7 +416,6 @@ def evaluate(
             results[task_template_key][metric + "_stderr"] = stderr(items)
             _metric_results[metric + "_stderr"] = stderr(items)
         metric_results.append(_metric_results)
-
     return {
         # List of results that tracks the averages per model and prompt.
         "results": metric_results,
@@ -415,7 +423,7 @@ def evaluate(
         # List of all prompt x doc examples with additional information in it.
         # Original results used for generating the table when running this file.
         "table_results": dict(results),
-    }
+    }, accelerator.is_main_process
 
 
 def make_table(results: dict) -> str:

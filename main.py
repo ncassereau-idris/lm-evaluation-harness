@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import os
+import accelerate
 from codecarbon import OfflineEmissionsTracker
 
 import lm_eval.evaluator as evaluator
@@ -147,7 +148,7 @@ def main():
     print()  # Ensure a newline after `main` command.
     with OfflineEmissionsTracker(country_iso_code="FRA", log_level="error"):
         print()  # Add newline between emissions tracker and evaluation logging.
-        results = evaluator.cli_evaluate(
+        results, is_main_process = evaluator.cli_evaluate(
             model_api_name=args.model_api_name,
             model_args=args.model_args,
             task_name=args.task_name,
@@ -159,18 +160,18 @@ def main():
             limit=args.limit,
             seed=args.seed,
         )
+    if is_main_process:
+        with open(f"./outputs/agg-{output_path}.json", "w") as f:
+            json.dump({"results": results["results"], "config": results["config"]}, f)
 
-    with open(f"./outputs/agg-{output_path}.json", "w") as f:
-        json.dump({"results": results["results"], "config": results["config"]}, f)
+        from scripts.agg2slim import agg2slim
 
-    from scripts.agg2slim import agg2slim
+        with open(f"./outputs/slim-{output_path}.json", "w") as f:
+            json.dump(agg2slim(results), f, indent=2)
 
-    with open(f"./outputs/slim-{output_path}.json", "w") as f:
-        json.dump(agg2slim(results), f, indent=2)
-
-    print(f"\n{evaluator.make_table(results)}")
-    emissions_output_path = f"./outputs/emissions-{output_path}.csv"
-    os.rename("emissions.csv", emissions_output_path)
+        print(f"\n{evaluator.make_table(results)}")
+        emissions_output_path = f"./outputs/emissions-{output_path}.csv"
+        os.rename("emissions.csv", emissions_output_path)
 
 
 if __name__ == "__main__":

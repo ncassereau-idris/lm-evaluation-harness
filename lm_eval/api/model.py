@@ -167,6 +167,9 @@ class TokenLM(LM):
         )
 
     def loglikelihood_rolling(self, requests: List[Tuple[str, str]]) -> List[float]:
+        # TODO: Fix this.
+
+
         # TODO: Implement caching once we've confirmed the perplexity implementation
         # TODO: Automatic batch size detection for vectorization
         loglikelihoods = []
@@ -235,10 +238,6 @@ class TokenLM(LM):
             dim=-1
         )  # [batch, padding_length, vocab]
         # multi_logits = accelerate. 
-        print(f"{'='*80}")
-        print(f"Multi Logits Shape: {log_softmaxes.shape}")
-        print(f"Context Tokens Shape: {context_inputs['input_ids'].shape}")
-        print(f"{'='*40}")
 
         logprobs_results = []
         exact_match_results = []
@@ -247,11 +246,12 @@ class TokenLM(LM):
             # print(f'Logits Shape: {log_softmax.shape}')
             target_length = target_inputs['attention_mask'][i].sum().item()
             context_length = context_inputs['attention_mask'][i].sum().item()
-            print('target len', target_length)
-            print('context len', context_length)
+            # print('target len', target_length)
+            # print('context len', context_length)
+            # print(context_length - 1, target_length + context_length - 1)
             target_logits = log_softmax[(context_length - 1) : (target_length + context_length - 1)]
-            print('target logits', target_logits.shape)
-            target_tokens = target_inputs['input_ids'][i].unsqueeze(0)
+            # print('target logits', target_logits.shape)
+            target_tokens = target_inputs['input_ids'][i][:target_length].unsqueeze(0)
             # print(f"Target Logits Shape: {target_logits.shape}")
             # print(f"Target Tokens Shape: {target_tokens.shape}")
             greedy_tokens = target_logits.argmax(dim=-1)
@@ -263,8 +263,8 @@ class TokenLM(LM):
             # print(f"Target tokens: {target_tokens}")
             # print(f"Logprob Per Token: {logprob_per_token}")
             logprobs = logprob_per_token.sum().unsqueeze(0)
-            logprobs_results.append(logprobs.cpu())
-            exact_match_results.append(exact_match.cpu())
+            logprobs_results.append(logprobs)
+            exact_match_results.append(exact_match)
         # print(f"{'='*80}")
         return torch.cat(logprobs_results, dim=0), torch.cat(exact_match_results, dim=0)
         #     for (cache_key, _, _), logits, input, input_len, cont_tokens in zip(
