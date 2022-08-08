@@ -9,6 +9,11 @@ from requests import request
 from tqdm import tqdm
 from typing import List, Optional, Tuple
 
+from torch.utils.data import Dataset, DataLoader
+from accelerate import Accelerator 
+from dataclasses import dataclass
+import transformers
+
 import lm_eval.models
 from lm_eval.models import huggingface
 import lm_eval.tasks
@@ -21,6 +26,17 @@ from lm_eval.api.request import Request
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def setup_example_logger(output_path):
+    """Sets up a logger that will save each example and prediction."""
+    example_logger = logging.getLogger("examples")
+    filename = f"./outputs/examples-{output_path}.jsonl"
+    formatter = logging.Formatter("%(message)s")
+    handler = logging.FileHandler(filename)
+    handler.setFormatter(formatter)
+    example_logger.addHandler(handler)
+    example_logger.setLevel(logging.INFO)
 
 
 def cli_evaluate(
@@ -36,6 +52,7 @@ def cli_evaluate(
     bootstrap_iters: Optional[int] = 100000,
     limit: Optional[int] = None,
     seed: Optional[int] = 1234,
+    accelerator: Optional[Accelerator] = None,
 ) -> dict:
     """Evaluate a model from an api on a given task with multiple possible prompt
      formats. This is effectively a wrapper around `evaluate` for command-line
@@ -68,8 +85,6 @@ def cli_evaluate(
      :return
          Dictionary of results
     """
-    set_seed(seed)
-
     tasks = lm_eval.tasks.get_task_list(task_name, template_names)
     model = lm_eval.models.get_model_from_args_string(
         model_api_name, model_args, {"batch_size": batch_size, "device": device}
@@ -81,14 +96,15 @@ def cli_evaluate(
         cache_location = f"lm_cache/{model_api_name}_{cache_args}.db"
         model = lm_eval.api.model.CachingLM(model, cache_location)
 
-    results, is_main_process = evaluate(
+    results = evaluate(
         model=model,
         tasks=tasks,
         num_fewshot=num_fewshot,
         batch_size=batch_size,
         limit=limit,
         bootstrap_iters=bootstrap_iters,
-        rng=np.random.default_rng(seed),
+        seed=seed,
+        accelerator=accelerator,
     )
 
     # Add info about the model and few shot config.
@@ -102,13 +118,7 @@ def cli_evaluate(
         "limit": limit,
         "bootstrap_iters": bootstrap_iters,
     }
-    return results, is_main_process
-
-
-from torch.utils.data import Dataset, DataLoader
-from accelerate import Accelerator 
-from dataclasses import dataclass
-import transformers
+    return results
 
 class RequestDataset(Dataset):
     def __init__(
@@ -169,7 +179,8 @@ def evaluate(
     batch_size: Optional[int] = None,
     bootstrap_iters: Optional[int] = 100000,
     limit: Optional[int] = None,
-    rng: Optional[np.random.Generator] = np.random.default_rng(),
+    seed: Optional[int] = 1234,
+    accelerator: Optional[Accelerator] = Accelerator(),
 ) -> dict:
     """Instantiate and evaluate a model on a list of tasks.
 
@@ -189,6 +200,9 @@ def evaluate(
     :return
         Dictionary of results
     """
+    set_seed(seed)
+    rng = np.random.default_rng(seed)
+
     # TODO: Completely refactor this entire function to not be a huge mess, ideally breaking it down into smaller pieces
     task_dict = {}
     for task in tasks:
@@ -287,8 +301,6 @@ def evaluate(
         for request_type, dataset in requests_datasets.items()
     }
 
-    accelerator = Accelerator()
-    # TODO: use `prepare`
     model.model = accelerator.prepare_model(model.model)
     requests_data_loaders = {
         request_type: accelerator.prepare_data_loader(dataloader)
@@ -321,6 +333,7 @@ def evaluate(
             )
 
             if accelerator.use_distributed:
+                # accelerator.wait_for_everyone()
                 doc_ids = accelerator.gather(doc_ids.squeeze())
                 unique_request_ids = accelerator.gather(unique_request_ids.squeeze())
                 responses = accelerator.gather(responses[0]), accelerator.gather(responses[1])
@@ -375,12 +388,14 @@ def evaluate(
             metrics, example = output
             example.update(fewshot_logging_info)
             example.update(task.get_logging_info())
-            example_logger.info(json.dumps(example))
+            if accelerator.is_main_process:
+                example_logger.info(json.dumps(example))
         else:
             metrics = output
             example = fewshot_logging_info
             example.update(task.get_logging_info())
-            example_logger.info(json.dumps(example))
+            if accelerator.is_main_process:
+                example_logger.info(json.dumps(example))
 
         for metric, value in metrics.items():
             vals[(task_template_key, metric)].append(value)
@@ -423,7 +438,7 @@ def evaluate(
         # List of all prompt x doc examples with additional information in it.
         # Original results used for generating the table when running this file.
         "table_results": dict(results),
-    }, accelerator.is_main_process
+    }
 
 
 def make_table(results: dict) -> str:

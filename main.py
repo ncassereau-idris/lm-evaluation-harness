@@ -3,8 +3,8 @@ import datetime
 import json
 import logging
 import os
-import accelerate
 from codecarbon import OfflineEmissionsTracker
+from accelerate import Accelerator
 
 import lm_eval.evaluator as evaluator
 from lm_eval.api import utils
@@ -135,6 +135,8 @@ def main():
     os.makedirs("./outputs", exist_ok=True)
     args = parse_args()
 
+    accelerator = Accelerator()
+
     if args.limit:
         logger.warning(
             "\n» WARNING: `--limit` SHOULD ONLY BE USED FOR TESTING. REAL METRICS "
@@ -143,12 +145,14 @@ def main():
 
     template_names = utils.cli_template_names(args.task_name, args.template_names)
     output_path = args_to_name(args)
-    setup_example_logger(output_path)
+
+    if accelerator.is_main_process:
+        setup_example_logger(output_path)
 
     print()  # Ensure a newline after `main` command.
     with OfflineEmissionsTracker(country_iso_code="FRA", log_level="error"):
         print()  # Add newline between emissions tracker and evaluation logging.
-        results, is_main_process = evaluator.cli_evaluate(
+        results = evaluator.cli_evaluate(
             model_api_name=args.model_api_name,
             model_args=args.model_args,
             task_name=args.task_name,
@@ -159,8 +163,9 @@ def main():
             use_cache=args.use_cache,
             limit=args.limit,
             seed=args.seed,
+            accelerator=accelerator,
         )
-    if is_main_process:
+    if accelerator.is_main_process:
         with open(f"./outputs/agg-{output_path}.json", "w") as f:
             json.dump({"results": results["results"], "config": results["config"]}, f)
 

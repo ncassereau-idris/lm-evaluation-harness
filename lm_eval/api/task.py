@@ -525,6 +525,7 @@ class PromptSourceTask(Task):
             example = {
                 "pred": pred,
                 "target": target,
+                "loglikelihoods": [r.tolist() for r in results],
                 "answer_choices_list": answer_choices_list,
             }
             return out, example

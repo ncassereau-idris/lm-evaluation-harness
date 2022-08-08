@@ -315,6 +315,7 @@ class WinogenderSchemaDiagnostics(PromptSourceTask):
             example = {
                 "target": target,
                 "answer_choices_list": answer_choices_list,
+                "loglikelihoods": [r.tolist() for r in results],
                 "pred": pred,
             }
             return out, example

@@ -429,10 +429,7 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         """
         context_tokens = context_inputs
         targets_tokens = target_inputs
-        print("inputs", context_tokens['input_ids'])
-        print("targets", targets_tokens['input_ids'])
         outputs = self._model_call(inputs=context_tokens, labels=targets_tokens)
-        print('logits shape', outputs.logits.shape)
         log_softmaxes = F.log_softmax(outputs.logits, dim=-1)
 
         output_iterator = zip(
@@ -440,26 +437,22 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
             targets_tokens["input_ids"],
             targets_tokens["attention_mask"],
         )
-        
-        results = []
+        logprobs_results = []
+        exact_match_results = []
         for log_softmax, target_tokens, target_mask in output_iterator:
             length = target_mask.sum()
-            print('target length:', length)
-            print('log-softmax shape:', log_softmax.shape)
             log_softmax = log_softmax[:length]
-            print('truncated log-softmax shape:', log_softmax.shape)
-            print('target tokens', target_tokens)
             target_tokens = target_tokens[:length]
             greedy_tokens = log_softmax.argmax(dim=-1)
-            max_equal = (greedy_tokens == target_tokens).all()
+            exact_match = (greedy_tokens == target_tokens).all().unsqueeze(0).to(torch.bool)
             target_logits = torch.gather(
                 log_softmax, 1, target_tokens.unsqueeze(-1)
             ).squeeze(-1)
-            answer = (float(target_logits.sum()), bool(max_equal))
-            results.append(answer)
+            logprobs_results.append(target_logits.sum().unsqueeze(0))
+            exact_match_results.append(exact_match)
             # if cache_key is not None:
             #     self.cache_hook.add_partial("loglikelihood", cache_key, answer)
-        return results
+        return torch.cat(logprobs_results, dim=0), torch.cat(exact_match_results, dim=0)
 
     def _model_call(
         self, inputs: TokenSequence, labels: Optional[TokenSequence] = None
