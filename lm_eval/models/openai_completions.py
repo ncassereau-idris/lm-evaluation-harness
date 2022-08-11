@@ -69,7 +69,7 @@ class OpenAICompletionsLM(TokenLM):
         engine: str,
         device: Optional[str] = None,
         batch_size: Optional[int] = 20,
-        max_gen_toks: Optional[int] = 256,
+        user_defined_max_generation_length: Optional[int] = 256,
     ):
         """
         :param engine: str
@@ -86,7 +86,7 @@ class OpenAICompletionsLM(TokenLM):
         self.tokenizer.pad_token = "<|endoftext|>"
         self.vocab_size = self.tokenizer.vocab_size
 
-        self._max_gen_toks = max_gen_toks
+        self._user_defined_max_generation_length = user_defined_max_generation_length
         self._batch_size = batch_size  # TODO: adaptive batch size
 
         openai.api_key = os.environ["OPENAI_API_SECRET_KEY"]
@@ -106,8 +106,8 @@ class OpenAICompletionsLM(TokenLM):
         return 2048
 
     @property
-    def max_gen_toks(self) -> int:
-        return self._max_gen_toks
+    def user_defined_max_generation_length(self) -> int:
+        return self._user_defined_max_generation_length
 
     @property
     def batch_size(self) -> int:
@@ -126,7 +126,6 @@ class OpenAICompletionsLM(TokenLM):
     def _loglikelihood_tokens(
         self,
         requests: List[Union[Tuple[str, str], TokenSequence, TokenSequence]],
-        disable_tqdm: Optional[bool] = False,
     ) -> List[Tuple[float, bool]]:
         def _collate(x):
             # this doesn't efficiently handle last-token differences yet, but those are kinda annoying because
@@ -139,12 +138,11 @@ class OpenAICompletionsLM(TokenLM):
         reorder = utils.Reorderer(requests, _collate)
         for chunk in tqdm(
             list(utils.chunks(reorder.get_reordered(), self.batch_size)),
-            disable=disable_tqdm,
         ):
             inputs = []
             ctxlens = []
             for cache_key, context_enc, continuation_enc in chunk:
-                # max_gen_toks+1 because the API takes up to 2049 tokens, including the first context token
+                # user_defined_max_generation_length+1 because the API takes up to 2049 tokens, including the first context token
                 input = (context_enc + continuation_enc)[-(self.max_length + 1) :]
                 # TODO: the logic is much simpler if we just look at the length of continuation tokens
                 ctxlen = len(context_enc) - max(
@@ -208,14 +206,14 @@ class OpenAICompletionsLM(TokenLM):
                 until = stop_sequences + [self.eot_token]
 
             if max_generation_length is None:
-                max_tokens = self.max_gen_toks
+                max_tokens = self.user_defined_max_generation_length
             else:
                 max_tokens = max_generation_length
 
             inputs = []
             for context, _ in chunk:
                 context_enc = self.tok_encode(context)
-                input = context_enc[-(self.max_length - self.max_gen_toks) :]
+                input = context_enc[-(self.max_length - self.user_defined_max_generation_length) :]
                 inputs.append(input)
 
             responses = self._model_generate(

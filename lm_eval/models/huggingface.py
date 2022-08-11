@@ -9,47 +9,6 @@ from lm_eval.api import utils
 from lm_eval.api.model import TokenLM, TokenSequence
 
 
-_DeviceMapping = NewType("DeviceMapping", Mapping[str, Union[int, str, torch.device]])
-
-
-def _get_accelerate_args(
-    max_memory_per_gpu: Optional[Union[int, str]],
-    max_cpu_memory: Optional[Union[int, str]],
-    offload_folder: Optional[str],
-) -> dict:
-    """Returns the kwargs needed to apply `accelerate` in `AutoModel.from_pretrained`."""
-    max_memory = {}
-    if max_memory_per_gpu is not None:
-        max_memory_per_gpu_map = {
-            device_idx: max_memory_per_gpu
-            for device_idx in range(torch.cuda.device_count())
-        }
-        max_memory.update(max_memory_per_gpu_map)
-    if max_cpu_memory is not None:
-        max_memory["cpu"] = max_cpu_memory
-
-    args = {}
-    if max_memory:
-        args["max_memory"] = max_memory
-    args["device_map"] = "auto"
-    args["offload_folder"] = offload_folder
-    return args
-
-
-def _get_dtype(
-    dtype: Union[str, torch.dtype], config: Optional[transformers.AutoConfig] = None
-) -> torch.dtype:
-    """Converts `dtype` from `str` to torch.dtype when possible."""
-    if dtype is None and config is not None:
-        _torch_dtype = config.torch_dtype
-    elif isinstance(dtype, str) and dtype != "auto":
-        # Convert `str` args torch dtype: `float16` -> `torch.float16`
-        _torch_dtype = getattr(torch, dtype)
-    else:
-        _torch_dtype = dtype
-    return _torch_dtype
-
-
 class HuggingFaceAutoLM(TokenLM):
 
     AUTO_MODEL_CLASS: transformers.AutoModel = None
@@ -65,13 +24,8 @@ class HuggingFaceAutoLM(TokenLM):
         subfolder: Optional[str] = None,
         revision: Optional[str] = "main",
         batch_size: Optional[int] = 1,
-        max_gen_toks: Optional[int] = 256,
+        user_defined_max_generation_length: Optional[int] = 256,
         max_length: Optional[int] = None,
-        use_accelerate: Optional[bool] = False,
-        max_memory_per_gpu: Optional[Union[int, str]] = None,
-        max_cpu_memory: Optional[Union[int, str]] = None,
-        offload_folder: Optional[str] = "./offload",
-        dtype: Optional[Union[str, torch.dtype]] = None,
         device: Optional[Union[int, str]] = "cuda",
     ):
         """Initializes a HuggingFace `AutoModel` and `AutoTokenizer` for evaluation.
@@ -105,7 +59,7 @@ class HuggingFaceAutoLM(TokenLM):
         assert isinstance(batch_size, int)
 
         self._batch_size = batch_size  # TODO: Adaptive batch size
-        self._max_gen_toks = max_gen_toks
+        self._user_defined_max_generation_length = user_defined_max_generation_length
         self._max_length = max_length
         self._config = transformers.AutoConfig.from_pretrained(pretrained)
         
@@ -117,29 +71,13 @@ class HuggingFaceAutoLM(TokenLM):
         )
         self.tokenizer.model_max_length = self.max_length
 
-        # accelerate_kwargs = {}
-        # if use_accelerate:
-        #     accelerate_kwargs = _get_accelerate_args(
-        #         max_memory_per_gpu, max_cpu_memory, offload_folder
-        #     )
         self.model = self._create_auto_model(
             pretrained=pretrained,
             revision=revision,
             subfolder=subfolder,
-            torch_dtype=_get_dtype(dtype, self._config),
-            # **accelerate_kwargs,
         )
         self.model.eval()
         torch.set_grad_enabled(False)
-
-        # self._device = device
-        # if use_accelerate and "lm_head" in self.model.hf_device_map:
-        #     # `accelerate` can place `lm_head` weights on a different device than
-        #     # the user specified one so we force `self._device` to be the same as
-        #     # `lm_head`'s.
-        #     self._device = self.model.hf_device_map["lm_head"]
-        # if not use_accelerate:
-        #     self.model.to(self._device)
 
     def _create_auto_model(
         self,
@@ -147,19 +85,11 @@ class HuggingFaceAutoLM(TokenLM):
         pretrained: str,
         revision: str,
         subfolder: str,
-        device_map: Optional[Union[str, _DeviceMapping]] = None,
-        max_memory: Optional[dict] = None,
-        offload_folder: Optional[str] = None,
-        torch_dtype: Optional[Union[str, torch.dtype]] = None,
     ) -> transformers.AutoModel:
         """Returns a pre-trained pytorch model from a pre-trained model configuration."""
         model = self.AUTO_MODEL_CLASS.from_pretrained(
             pretrained,
             revision=revision + ("/" + subfolder if subfolder is not None else ""),
-            # device_map=device_map,
-            # max_memory=max_memory,
-            # offload_folder=offload_folder,
-            torch_dtype=torch_dtype,
         )
         return model
 
@@ -189,8 +119,8 @@ class HuggingFaceAutoLM(TokenLM):
         return self.tokenizer.eos_token_id
 
     @property
-    def max_gen_toks(self) -> int:
-        return self._max_gen_toks
+    def user_defined_max_generation_length(self) -> int:
+        return self._user_defined_max_generation_length
 
     @property
     def max_length(self) -> int:
@@ -235,63 +165,21 @@ class HuggingFaceAutoLM(TokenLM):
     def tok_decode(self, tokens: torch.LongTensor) -> List[str]:
         return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
 
-    def greedy_until(self, requests: List[Tuple[str, dict]]) -> List[str]:
-        def _collate(x):
-            tokens = self.tok_encode(x[0])
-            return len(tokens), x[0]
-
-        results = []
-        reorder = utils.Reorderer(requests, _collate)
-        for chunk in utils.chunks(
-            tqdm(reorder.get_reordered(), disable=False), self.batch_size
-        ):
-            context = [c[0] for c in chunk]
-            request_args = chunk[0][1]
-            stop_sequences = request_args["stop_sequences"]
-            max_generation_length = request_args["max_generation_length"]
-            num_fewshot = request_args["num_fewshot"]
-
-            assert (
-                isinstance(max_generation_length, int) or max_generation_length is None
-            )
-            assert isinstance(stop_sequences, list) or stop_sequences is None
-            assert isinstance(num_fewshot, int) or num_fewshot is None
-
-            # TODO: Find a better way to handle stop sequences for 0-shot.
-            if stop_sequences is None or num_fewshot == 0:
-                until = [self.eot_token]
-            else:
-                until = stop_sequences + [self.eot_token]
-
-            if max_generation_length is None:
-                max_tokens = self.max_gen_toks
-            else:
-                max_tokens = max_generation_length
-
-            # Ensure that the context does not encroach into the `space`
-            # for the generation.
-            # token_context = self.tok_encode_batch(context)
-            input_ids = token_context["input_ids"][
-                :, self.max_gen_toks - self.max_length :
-            ].to(self.device)
-            attention_mask = token_context["attention_mask"][
-                :, self.max_gen_toks - self.max_length :
-            ].to(self.device)
-
-            responses = self._model_generate(
-                inputs={"input_ids": input_ids, "attention_mask": attention_mask},
-                max_tokens=max_tokens,
-                stop=until,
-            )
-            responses = self.tok_decode(responses.tolist())
-
-            for response in responses:
-                for term in until:
-                    response = response.split(term)[0]
-                # partial caching
-                self.cache_hook.add_partial("greedy_until", (context, until), response)
-                results.append(response)
-        return reorder.get_original(results)
+    def greedy_until(
+        self, 
+        context_inputs,
+        stop_sequences,
+        max_generation_length,
+    ) -> List[str]:
+        assert isinstance(max_generation_length, torch.Tensor)
+        assert isinstance(stop_sequences, torch.Tensor) or stop_sequences is None
+        responses = self._model_generate(
+            inputs=context_inputs,
+            max_tokens=max_generation_length,
+            stop=stop_sequences,
+        )
+        responses = self.tok_decode(responses.tolist())
+        return responses
 
 
 class AutoCausalLM(HuggingFaceAutoLM):
@@ -316,8 +204,6 @@ class AutoCausalLM(HuggingFaceAutoLM):
             subfolder=subfolder,
             tokenizer=tokenizer,
         )
-        # TODO: NEED TO PAD LEFT FOR BATCH GENERATION.
-        tokenizer.padding_side = "right"
         return tokenizer
 
     def _model_call(
@@ -471,33 +357,33 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         )
         return generations
 
-
 class MultiTokenEOSCriteria(transformers.StoppingCriteria):
-    """Criteria to stop on the specified multi-token sequence."""
+    """Criteria to stop on the specified multi-token sequence ids."""
 
-    def __init__(self, sequence: str, tokenizer: transformers.PreTrainedTokenizer):
-        self.sequence = sequence
-        self.sequence_id = tokenizer.encode(sequence)
-        self.sequence_id_len = len(self.sequence_id) + 1
+    def __init__(self, sequence_ids: List[int], tokenizer: transformers.PreTrainedTokenizer):
+        self.sequence_ids = sequence_ids
+        self.sequence_ids_len = len(self.sequence_ids) + 1
+        self.sequence = tokenizer.decode(sequence_ids)
         self.tokenizer = tokenizer
 
     def __call__(
         self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
     ) -> bool:
-        last_token_id = input_ids[0, -self.sequence_id_len :]
+        last_token_id = input_ids[0, -self.sequence_ids_len :]
         last_tokens = self.tokenizer.decode(last_token_id)
         is_stopped = self.sequence in last_tokens
         return is_stopped
 
 
 def stop_sequences_criteria(
-    tokenizer: transformers.PreTrainedTokenizer, stop_sequences: List[str]
+    tokenizer: transformers.PreTrainedTokenizer,
+    stop_sequences_ids: Optional[List[int]] = None,
 ) -> transformers.StoppingCriteriaList:
     return transformers.StoppingCriteriaList(
         [
             *[
-                MultiTokenEOSCriteria(sequence, tokenizer)
-                for sequence in stop_sequences
+                MultiTokenEOSCriteria(sequence_ids, tokenizer)
+                for sequence_ids in stop_sequences_ids
             ],
         ]
     )

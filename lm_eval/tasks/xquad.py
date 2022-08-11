@@ -86,7 +86,7 @@ class XQuADEnglish(PromptSourceTask):
         """
         request_args = {
             "stop_sequences": self.stop_sequences(),
-            "max_generation_length": self.max_generation_length(),
+            "max_generation_length": self.task_defined_max_generation_length(),
             "num_fewshot": args["num_fewshot"],
         }
 
@@ -233,7 +233,7 @@ class XQuADArabic(PromptSourceTask):
 
         request_args = {
             "stop_sequences": self.stop_sequences(),
-            "max_generation_length": self.max_generation_length(),
+            "max_generation_length": self.task_defined_max_generation_length(),
             "num_fewshot": args["num_fewshot"],
         }
 

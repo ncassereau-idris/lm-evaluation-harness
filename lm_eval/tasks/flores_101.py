@@ -59,7 +59,7 @@ class Flores101MT(PromptSourceTask):
         if self.has_test_docs():
             return self.dataset["devtest"]
 
-    def max_generation_length(self):
+    def task_defined_max_generation_length(self):
         return 512
 
 

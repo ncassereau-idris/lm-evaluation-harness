@@ -67,7 +67,7 @@ class NewTask(PromptSourceTask):
             # named differently than the default `"test"`.
             return self.dataset["test"]
 
-    def max_generation_length(self):
+    def task_defined_max_generation_length(self):
         # Define this method when you want to control the length of few-shot
         # generations on specific tokens. The default is `None` which gets mapped
         # to a model's default max generation token length. E.g. see `lm_eval/models/gpt2.py:max_tokens()`

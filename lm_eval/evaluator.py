@@ -3,25 +3,22 @@ import itertools
 import json
 import logging
 import numpy as np
-import tokenizers
 import torch
-from requests import request
 from tqdm import tqdm
 from typing import List, Optional, Tuple
 
 from torch.utils.data import Dataset, DataLoader
 from accelerate import Accelerator 
 from dataclasses import dataclass
-import transformers
+
 
 import lm_eval.models
-from lm_eval.models import huggingface
 import lm_eval.tasks
 import lm_eval.api.metric
 import lm_eval.api.model
 from lm_eval.api.utils import set_seed
 from lm_eval.api.task import Task
-from lm_eval.api.request import Request
+from lm_eval.api.request import Request, RequestDataset, RequestCollator
 
 
 logger = logging.getLogger(__name__)
@@ -120,56 +117,6 @@ def cli_evaluate(
     }
     return results
 
-class RequestDataset(Dataset):
-    def __init__(
-        self,
-        request_type: str,
-        requests: List[Tuple[str, Request]],
-        model 
-    ):
-        # self.requests: List[(request_type, list[Request])]
-        assert len({r.request_type for r in requests}) == 1 and request_type == requests[0].request_type
-        self.request_type = request_type  
-        self.requests = requests
-        self.model = model
-
-    def __len__(self):
-        return len(self.requests)
-
-    def __getitem__(self, idx):
-        _, request = self.requests[idx]
-        context, target = request.args
-        decoder_inputs = context + target
-        decoder_input_tokens = self.model.tok_encode(decoder_inputs)
-        decoder_input_ids = decoder_input_tokens['input_ids'][:-1][-self.model.max_length:]
-        decoder_attention_mask = decoder_input_tokens['attention_mask'][:-1][-self.model.max_length:]
-        decoder_inputs = {
-            'input_ids': decoder_input_ids,
-            'attention_mask': decoder_attention_mask,
-        }
-        context_tokens, target_tokens = self.model.tok_encode(context), self.model.tok_encode(target)
-        return (
-            torch.tensor([request.index]),
-            torch.tensor([request.unique_request_id]), 
-            torch.tensor([request.doc_id]), 
-            context_tokens, target_tokens,
-            decoder_input_tokens
-        )
-
-class DataCollator:
-    def __init__(self, *args, **kwargs):
-        self.collator = transformers.data.DataCollatorWithPadding(*args, **kwargs)
-
-    def __call__(self, samples):
-        index_batch, unique_request_id_batch, doc_id_batch, context_tokens, target_tokens, decoder_input_tokens = zip(*samples)
-        context_batch = self.collator(list(context_tokens))
-        target_batch = self.collator(list(target_tokens))
-        decoder_tokens_batch = self.collator(list(decoder_input_tokens))
-        return (torch.cat(index_batch, dim=0),
-            torch.cat(unique_request_id_batch, dim=0),
-            torch.cat(doc_id_batch, dim=0),
-            context_batch, target_batch, decoder_tokens_batch
-        )
 
 def evaluate(
     *,
@@ -269,20 +216,6 @@ def evaluate(
         # Store the task version.
         versions[task_template_key] = task.VERSION
     
-    # list(requests.items()) -> List[Tuple[reqtype, List[Request]]]
-
-    # requests is a list of all the language model requests for each doc
-
-    # TODO: flatten requests before putting into the dataset to avoid single blob of 
-    # requests per request type.
-    # TODO: handle and track multiple request types.
-    # flattened_requests = []
-    # for request_type, request_list in requests.items():
-    #     for r in request_list:
-    #         flattened_requests.append((request_type, r))
-
-    # TODO: create other request type datasets
-
     requests_datasets = {
         request_type: RequestDataset(request_type, request_list, model)
         for request_type, request_list in requests.items()
@@ -291,8 +224,10 @@ def evaluate(
     requests_data_loaders = {
         request_type: DataLoader(
             dataset, 
-            collate_fn=DataCollator(
+            collate_fn=RequestCollator(
+                request_type=request_type,
                 tokenizer=model.tokenizer,
+                # TODO: probably should set padding_side here
                 padding=True,
             ),
             batch_size=batch_size, 
@@ -321,38 +256,56 @@ def evaluate(
             # kind of caching, but that would be more of a band-aid solution. We
             # could also implement some kind of auto-grouping here; they should
             # end up next to each other.
-            # TODO: Now we have batches so pass in batches of requests to the models.
-            _, unique_request_ids, doc_ids, context_inputs, target_inputs, decoder_inputs = request_batch
-            # print('batch size:', len(request_indices))
             logger.info(f"\n» Running all `{request_type}` requests")
+
             # TODO: Make sure all requests are the same type for the given `request_type`
-            responses = getattr(model, request_type)(
-                context_inputs,
-                target_inputs,
-                decoder_inputs
-            )
+            if request_type == "loglikelihood":
+                responses = model.loglikelihood(
+                    request_batch['context_inputs'],
+                    request_batch['target_inputs'],
+                    request_batch['decoder_inputs'],
+                )
+            elif request_type == "greedy_until":
+                responses = model.greedy_until(
+                    request_batch['context_inputs'],
+                    request_batch['stop_sequences'],
+                    request_batch['max_generation_length'],
+                )
+            else:
+                raise NotImplementedError(f"Request type '{request_type}' not implemented")
 
             if accelerator.use_distributed:
-                # accelerator.wait_for_everyone()
-                doc_ids = accelerator.gather(doc_ids.squeeze())
-                unique_request_ids = accelerator.gather(unique_request_ids.squeeze())
-                responses = accelerator.gather(responses[0]), accelerator.gather(responses[1])
-                if step == len(requests_data_loader) - 1:
-                    # Last batch needs to be truncated on distributed systems as it contains additional samples
-                    responses = responses[: len(requests_data_loader.dataset) - samples_seen]
-                else:
-                    # Otherwise we add the number of samples seen
-                    samples_seen += len(responses)
+                request_batch['doc_id'] = accelerator.gather(request_batch['doc_id'].squeeze())
+                request_batch['unique_request_id'] = accelerator.gather(request_batch['unique_request_id'].squeeze())
+                if request_type == "loglikelihood":
+                    responses = accelerator.gather(responses[0]), accelerator.gather(responses[1])
+                    if step == len(requests_data_loader) - 1:
+                        # Last batch needs to be truncated on distributed systems as it contains additional samples
+                        responses = responses[: len(requests_data_loader.dataset) - samples_seen]
+                    else:
+                        # Otherwise we add the number of samples seen
+                        samples_seen += len(responses)
+                elif request_type == "greedy_until":
+                    # TODO: Gather completions from greedy_until
+                    responses = accelerator.gather(responses)
+            
+            if request_type == "greedy_until":
+                results = []
+                for response in responses:
+                    for stop_sequence in request_batch['stop_sequences']:
+                        stop_sequence = stop_sequence.tolist()
+                        stop_sequence_string = model.tokenizer.decode(stop_sequence)
+                        response = response.split(stop_sequence_string)[0]
+                    # TODO: Partial caching
+                    # self.cache_hook.add_partial("greedy_until", (context, until), response)
+                    results.append(response)
+                # TODO: Clean up
+                responses = results
             
             if len(responses) > 1:
                 responses = list(zip(*responses))  # Tuple 
 
-                # list(zip(*responses, doc_ids, unique_request_ids))
-            # results = [
-            #     x if req.index is None else x[req.index] for x, req in zip(
-            #         results, request_batch)
-            # ]
-            for unique_request_id, doc_id, response in zip(unique_request_ids, doc_ids, responses):
+            for unique_request_id, doc_id, response in zip(request_batch['unique_request_id'], request_batch['doc_id'], responses):
                 (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info, request_return_index) = \
                     requests_origin[request_type][unique_request_id]
                                 
@@ -368,12 +321,12 @@ def evaluate(
     vals = collections.defaultdict(list)
     example_logger = logging.getLogger("examples")
     for (task_template_key, doc_id), per_doc_requests in process_response_queue.items():
-        unique_request_ids = set()
+        request_batch['unique_request_id'] = set()
         filtered_per_doc_requests = []
         for per_doc_request in per_doc_requests:
-            if per_doc_request[-1].item() not in unique_request_ids:
+            if per_doc_request[-1].item() not in request_batch['unique_request_id']:
                 filtered_per_doc_requests.append(per_doc_request)
-                unique_request_ids.add(per_doc_request[-1].item())
+                request_batch['unique_request_id'].add(per_doc_request[-1].item())
         per_doc_requests = filtered_per_doc_requests
         per_doc_requests.sort(key=lambda x: x[0])
         per_doc_results = [x[1] for x in per_doc_requests]
@@ -382,6 +335,7 @@ def evaluate(
         task = task_dict[task_template_key]
         doc = docs[(task_template_key, doc_id)]
 
+        print(per_doc_results)
         output = task.process_results(doc, per_doc_results)
 
         if task.save_examples:

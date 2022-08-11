@@ -68,7 +68,7 @@ class WebNLG(PromptSourceTask):
             else:
                 return self.dataset["test"]
 
-    def max_generation_length(self):
+    def task_defined_max_generation_length(self):
         return 250
 
 

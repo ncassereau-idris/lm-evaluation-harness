@@ -254,6 +254,6 @@ class Squad(PromptSourceTask):
     def doc_to_target(self, doc):
         return doc
 
-    def max_generation_length(self) -> Optional[int]:
+    def task_defined_max_generation_length(self) -> Optional[int]:
         """Denote where the max length of the generation if it is obvious from the task."""
         return 5

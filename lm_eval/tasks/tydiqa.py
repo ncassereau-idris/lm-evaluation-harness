@@ -84,7 +84,7 @@ class TyDiQAGoldPGeneration(PromptSourceTask):
     def validation_docs(self):
         return self.dataset["validation"]
 
-    def max_generation_length(self):
+    def task_defined_max_generation_length(self):
         return 128
 
     def compute_score(self, targets, pred, metric=compute_exact, agg=max):

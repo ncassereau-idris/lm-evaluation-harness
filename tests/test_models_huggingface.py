@@ -31,10 +31,10 @@ def test_stop_sequences(stop_sequences, test_input, expected):
     )
     inputs = causal_model.tok_encode_batch([test_input])
     input_ids = inputs["input_ids"][
-        :, causal_model.max_gen_toks - causal_model.max_length :
+        :, causal_model.user_defined_max_generation_length - causal_model.max_length :
     ].to(_DEVICE)
     attention_mask = inputs["attention_mask"][
-        :, causal_model.max_gen_toks - causal_model.max_length :
+        :, causal_model.user_defined_max_generation_length - causal_model.max_length :
     ].to(_DEVICE)
     generations = causal_model._model_generate(
         inputs={"input_ids": input_ids, "attention_mask": attention_mask},

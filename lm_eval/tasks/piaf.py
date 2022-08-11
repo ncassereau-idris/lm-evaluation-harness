@@ -55,7 +55,7 @@ class PIAF(PromptSourceTask):
         if self.has_test_docs():
             return self.dataset["train"]
 
-    def max_generation_length(self):
+    def task_defined_max_generation_length(self):
         return 128
 
     @staticmethod

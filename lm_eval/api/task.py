@@ -270,7 +270,7 @@ class PromptSourceTask(Task):
         """
         return [self.example_separator]
 
-    def max_generation_length(self) -> Optional[int]:
+    def task_defined_max_generation_length(self) -> Optional[int]:
         """Denote where the max length of the generation if it is obvious from the task."""
         return None
 
@@ -443,7 +443,7 @@ class PromptSourceTask(Task):
             # If not, then this is a generation prompt.
             request_args = {
                 "stop_sequences": self.stop_sequences(),
-                "max_generation_length": self.max_generation_length(),
+                "max_generation_length": self.task_defined_max_generation_length(),
                 "num_fewshot": args["num_fewshot"],
             }
             cont_request = rf.greedy_until(ctx, request_args)

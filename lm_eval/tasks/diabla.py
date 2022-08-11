@@ -62,7 +62,7 @@ class DiaBLa(PromptSourceTask):
         if self.has_test_docs():
             return self.dataset["test"]
 
-    def max_generation_length(self):
+    def task_defined_max_generation_length(self):
         return 512
 
     def invalid_doc_for_prompt(self, doc) -> bool:
