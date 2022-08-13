@@ -494,11 +494,17 @@ class PromptSourceTask(Task):
                         else 0.0
                     )
             # TODO: Add metrics here.
+            example = {
+                "pred": pred,
+                "target": target,
+                "loglikelihoods": [r.tolist() for r in results],
+                "answer_choices_list": answer_choices_list,
+            }
         else:
             # If not, then this is a generation prompt.
             # NOTE: In the future, target will be a list of strings.
             assert isinstance(target, list)
-            pred = results[0].strip()
+            pred = results.strip()
             out = {}
             for metric in self.prompt_template.metadata.metrics:
                 if metric not in self.CONFIGURED_GENERATION_PS_METRICS:
@@ -518,16 +524,11 @@ class PromptSourceTask(Task):
                     out = {**out, **rouge_scores}
                 elif metric == "SARI":
                     out["sari"] = sari(self.doc_to_rawtext(doc), pred, target)
-
-        # TODO: Wrap process results s.t. override impl do not
-        # override the save examples.
-        if self.save_examples:
             example = {
                 "pred": pred,
                 "target": target,
-                "loglikelihoods": [r.tolist() for r in results],
-                "answer_choices_list": answer_choices_list,
             }
+        if self.save_examples:
             return out, example
         return out
 

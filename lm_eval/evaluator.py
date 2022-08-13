@@ -266,6 +266,7 @@ def evaluate(
                     request_batch['decoder_inputs'],
                 )
             elif request_type == "greedy_until":
+                # model.model = accelerator.unwrap_model(model.model)
                 responses = model.greedy_until(
                     request_batch['context_inputs'],
                     request_batch['stop_sequences'],
@@ -290,7 +291,7 @@ def evaluate(
                     responses = accelerator.gather(responses)
             
             if request_type == "greedy_until":
-                results = []
+                split_responses = []
                 for response in responses:
                     for stop_sequence in request_batch['stop_sequences']:
                         stop_sequence = stop_sequence.tolist()
@@ -298,12 +299,14 @@ def evaluate(
                         response = response.split(stop_sequence_string)[0]
                     # TODO: Partial caching
                     # self.cache_hook.add_partial("greedy_until", (context, until), response)
-                    results.append(response)
+                    split_responses.append(response)
                 # TODO: Clean up
-                responses = results
-            
+                print(split_responses)
+                responses = [split_responses]
             if len(responses) > 1:
                 responses = list(zip(*responses))  # Tuple 
+            if request_type == "greedy_until":
+                responses = responses[0]
 
             for unique_request_id, doc_id, response in zip(request_batch['unique_request_id'], request_batch['doc_id'], responses):
                 (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info, request_return_index) = \
@@ -311,6 +314,7 @@ def evaluate(
                                 
                 assert doc_id == origin_doc_id
                 response = response[request_return_index] if request_return_index is not None else response
+                print('resp', response)
                 if isinstance(response, torch.Tensor):
                     response = response.cpu()
 
@@ -321,6 +325,7 @@ def evaluate(
     vals = collections.defaultdict(list)
     example_logger = logging.getLogger("examples")
     for (task_template_key, doc_id), per_doc_requests in process_response_queue.items():
+        print(f'per_doc_reequest:', per_doc_requests)
         request_batch['unique_request_id'] = set()
         filtered_per_doc_requests = []
         for per_doc_request in per_doc_requests:
@@ -329,27 +334,28 @@ def evaluate(
                 request_batch['unique_request_id'].add(per_doc_request[-1].item())
         per_doc_requests = filtered_per_doc_requests
         per_doc_requests.sort(key=lambda x: x[0])
+
         per_doc_results = [x[1] for x in per_doc_requests]
         fewshot_logging_info = [x[2] for x in per_doc_requests][0]
 
         task = task_dict[task_template_key]
         doc = docs[(task_template_key, doc_id)]
 
-        print(per_doc_results)
-        output = task.process_results(doc, per_doc_results)
-
-        if task.save_examples:
-            metrics, example = output
-            example.update(fewshot_logging_info)
-            example.update(task.get_logging_info())
-            if accelerator.is_main_process:
-                example_logger.info(json.dumps(example))
-        else:
-            metrics = output
-            example = fewshot_logging_info
-            example.update(task.get_logging_info())
-            if accelerator.is_main_process:
-                example_logger.info(json.dumps(example))
+        print(f'results:', per_doc_results)
+        for r in per_doc_results:
+            output = task.process_results(doc, r)
+            if task.save_examples:
+                metrics, example = output
+                example.update(fewshot_logging_info)
+                example.update(task.get_logging_info())
+                if accelerator.is_main_process:
+                    example_logger.info(json.dumps(example))
+            else:
+                metrics = output
+                example = fewshot_logging_info
+                example.update(task.get_logging_info())
+                if accelerator.is_main_process:
+                    example_logger.info(json.dumps(example))
 
         for metric, value in metrics.items():
             vals[(task_template_key, metric)].append(value)
@@ -360,7 +366,6 @@ def evaluate(
         task_name, prompt_name = lm_eval.tasks._split_task_template_key(
             task_template_key
         )
-
         results[task_template_key]["task_name"] = task_name
         results[task_template_key]["prompt_name"] = prompt_name
         task = task_dict[task_template_key]
