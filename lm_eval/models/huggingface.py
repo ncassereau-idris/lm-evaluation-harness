@@ -104,8 +104,7 @@ class HuggingFaceAutoLM(TokenLM):
         """Returns a pre-trained tokenizer from a pre-trained tokenizer configuration."""
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             pretrained if tokenizer is None else tokenizer,
-            revision=revision,
-            subfolder=subfolder,
+            revision=revision + ("/" + subfolder if subfolder is not None else ""),
         )
         tokenizer.pad_token = tokenizer.eos_token
         return tokenizer
@@ -178,8 +177,7 @@ class HuggingFaceAutoLM(TokenLM):
             max_tokens=max_generation_length,
             stop=stop_sequences,
         )
-        responses = self.tok_decode(responses.tolist())
-        return responses
+        return responses.contiguous()
 
 
 class AutoCausalLM(HuggingFaceAutoLM):
@@ -223,6 +221,7 @@ class AutoCausalLM(HuggingFaceAutoLM):
             max_new_tokens=max_tokens,
             stopping_criteria=stopping_criteria,
             do_sample=False,
+            synced_gpus=True
         )
         return utils.select_continuation_from_batch_left_padding(
             generations, max_context_size=inputs["input_ids"].size(1)

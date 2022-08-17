@@ -1,13 +1,10 @@
 import lm_eval
 import json
-import sys
 import accelerate
+from accelerate import Accelerator 
 
 
-if __name__ == "__main__":
-    # model = lm_eval.get_model("hf-causal", pretrained='gpt2', device='cuda', batch_size=10)
-    # model = lm_eval.get_model("hf-causal", pretrained='gpt2', device='cuda')
-    model = lm_eval.get_model("hf-seq2seq", pretrained='google/t5-small-lm-adapt', device='cuda')
+def test_llh_tasks():
     tasks = lm_eval.get_task_list(
         'sst',
         template_names=['happy or mad', 'review', 'said']
@@ -32,13 +29,33 @@ if __name__ == "__main__":
         'axg',
         template_names=['GPT-3 style', 'MNLI crowdsource', 'based on the previous passage']
     )
-    if sys.argv[1] == 'master':
+    return tasks
+
+def test_greedy_tasks():
+    tasks = lm_eval.get_task_list(
+        'mrpc',
+        template_names=['generate_sentence']
+    )
+    return tasks
+
+import argparse
+argparser = argparse.ArgumentParser()
+argparser.add_argument('--branch', type=str, default='add-data-parallel')
+args = argparser.parse_args()
+
+if __name__ == "__main__":
+    accelerator = Accelerator()
+    model = lm_eval.get_model("hf-seq2seq", pretrained='google/t5-small-lm-adapt')
+    # tasks = test_greedy_tasks()
+    tasks = test_llh_tasks()
+
+    if args.branch == 'master':
         results = lm_eval.evaluate(model=model, tasks=tasks)
-        with open(f'results_batch_size={model.batch_size}-branch={sys.argv[1]}.json', 'w') as f:
+        with open(f'results_batch_size={model.batch_size}-branch={args.branch}.json', 'w') as f:
             json.dump(results, f, indent=2)
     else:
         for batch_size in [80, 1]:
             results = lm_eval.evaluate(
-                model=model, tasks=tasks, batch_size=batch_size)
-            with open(f'results_batch_size={batch_size}-branch={sys.argv[1]}.json', 'w') as f:
+                model=model, tasks=tasks, batch_size=batch_size, accelerator=accelerator)
+            with open(f'results_batch_size={batch_size}-branch={args.branch}.json', 'w') as f:
                 json.dump(results, f, indent=2)

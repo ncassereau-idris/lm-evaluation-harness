@@ -501,10 +501,9 @@ class PromptSourceTask(Task):
                 "answer_choices_list": answer_choices_list,
             }
         else:
-            # If not, then this is a generation prompt.
-            # NOTE: In the future, target will be a list of strings.
             assert isinstance(target, list)
-            pred = results.strip()
+            # NOTE: `results` only support single prediction generation.
+            pred = results[0].strip()
             out = {}
             for metric in self.prompt_template.metadata.metrics:
                 if metric not in self.CONFIGURED_GENERATION_PS_METRICS:

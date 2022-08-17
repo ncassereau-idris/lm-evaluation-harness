@@ -84,7 +84,7 @@ def cli_evaluate(
     """
     tasks = lm_eval.tasks.get_task_list(task_name, template_names)
     model = lm_eval.models.get_model_from_args_string(
-        model_api_name, model_args, {"batch_size": batch_size, "device": device}
+        model_api_name, model_args
     )
 
     if use_cache:
@@ -241,7 +241,6 @@ def evaluate(
         request_type: accelerator.prepare_data_loader(dataloader)
         for request_type, dataloader in requests_data_loaders.items()
     }
-    # model.model, requests_data_loader = accelerator.prepare(model.model, requests_data_loader)
 
     # All responses for each (task, doc)
     process_response_queue = collections.defaultdict(list)
@@ -257,14 +256,15 @@ def evaluate(
             # could also implement some kind of auto-grouping here; they should
             # end up next to each other.
             logger.info(f"\n» Running all `{request_type}` requests")
-
             # TODO: Make sure all requests are the same type for the given `request_type`
             if request_type == "loglikelihood":
+                # print('request_batch', request_batch)
                 responses = model.loglikelihood(
                     request_batch['context_inputs'],
                     request_batch['target_inputs'],
                     request_batch['decoder_inputs'],
                 )
+                # print('LOGLIKELIHOOD RESULTS', responses)
             elif request_type == "greedy_until":
                 # model.model = accelerator.unwrap_model(model.model)
                 responses = model.greedy_until(
@@ -272,6 +272,7 @@ def evaluate(
                     request_batch['stop_sequences'],
                     request_batch['max_generation_length'],
                 )
+                # accelerator.print('GREEDY UNTIL RESULTS', responses.shape)
             else:
                 raise NotImplementedError(f"Request type '{request_type}' not implemented")
 
@@ -289,7 +290,8 @@ def evaluate(
                 elif request_type == "greedy_until":
                     # TODO: Gather completions from greedy_until
                     responses = accelerator.gather(responses)
-            
+                    responses = model.tok_decode(responses.tolist())
+
             if request_type == "greedy_until":
                 split_responses = []
                 for response in responses:
@@ -300,24 +302,19 @@ def evaluate(
                     # TODO: Partial caching
                     # self.cache_hook.add_partial("greedy_until", (context, until), response)
                     split_responses.append(response)
-                # TODO: Clean up
-                print(split_responses)
-                responses = [split_responses]
-            if len(responses) > 1:
+                responses = split_responses
+                # accelerator.print('GREEDY UNTIL RESPONSES', responses)
+            if request_type == 'loglikelihood':  # TODO: This may effect the `loglikelihood_rolling` responses.
                 responses = list(zip(*responses))  # Tuple 
-            if request_type == "greedy_until":
-                responses = responses[0]
-
+            # accelerator.print(f'zip resposnes :', responses)
             for unique_request_id, doc_id, response in zip(request_batch['unique_request_id'], request_batch['doc_id'], responses):
                 (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info, request_return_index) = \
                     requests_origin[request_type][unique_request_id]
                                 
                 assert doc_id == origin_doc_id
                 response = response[request_return_index] if request_return_index is not None else response
-                print('resp', response)
                 if isinstance(response, torch.Tensor):
                     response = response.cpu()
-
                 process_response_queue[(task_template_key, int(doc_id))].append(
                     (i, response, fewshotex_logging_info, unique_request_id)
                 )
@@ -325,7 +322,8 @@ def evaluate(
     vals = collections.defaultdict(list)
     example_logger = logging.getLogger("examples")
     for (task_template_key, doc_id), per_doc_requests in process_response_queue.items():
-        print(f'per_doc_reequest:', per_doc_requests)
+        # accelerator.print(f'per_doc_reequest:', per_doc_requests)
+        # print(f'per_doc_reequest:', per_doc_requests[0])
         request_batch['unique_request_id'] = set()
         filtered_per_doc_requests = []
         for per_doc_request in per_doc_requests:
@@ -336,26 +334,26 @@ def evaluate(
         per_doc_requests.sort(key=lambda x: x[0])
 
         per_doc_results = [x[1] for x in per_doc_requests]
+        # accelerator.print(f'filtered per_doc_results:', per_doc_results)
         fewshot_logging_info = [x[2] for x in per_doc_requests][0]
 
         task = task_dict[task_template_key]
         doc = docs[(task_template_key, doc_id)]
 
-        print(f'results:', per_doc_results)
-        for r in per_doc_results:
-            output = task.process_results(doc, r)
-            if task.save_examples:
-                metrics, example = output
-                example.update(fewshot_logging_info)
-                example.update(task.get_logging_info())
-                if accelerator.is_main_process:
-                    example_logger.info(json.dumps(example))
-            else:
-                metrics = output
-                example = fewshot_logging_info
-                example.update(task.get_logging_info())
-                if accelerator.is_main_process:
-                    example_logger.info(json.dumps(example))
+
+        output = task.process_results(doc, per_doc_results)
+        if task.save_examples:
+            metrics, example = output
+            example.update(fewshot_logging_info)
+            example.update(task.get_logging_info())
+            if accelerator.is_main_process:
+                example_logger.info(json.dumps(example))
+        else:
+            metrics = output
+            example = fewshot_logging_info
+            example.update(task.get_logging_info())
+            if accelerator.is_main_process:
+                example_logger.info(json.dumps(example))
 
         for metric, value in metrics.items():
             vals[(task_template_key, metric)].append(value)
