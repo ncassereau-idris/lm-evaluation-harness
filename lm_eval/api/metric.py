@@ -291,9 +291,9 @@ def rouge(
     # convert the named tuples to plain nested dicts
     score = {
         rouge_type: {
-            "precision": score[rouge_type].precision,
-            "recall": score[rouge_type].recall,
-            "fmeasure": score[rouge_type].fmeasure,
+            "precision": score[rouge_type].precision * 100.0,
+            "recall": score[rouge_type].recall * 100.0,
+            "fmeasure": score[rouge_type].fmeasure * 100.0,
         }
         for rouge_type in rouge_types
     }
