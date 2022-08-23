@@ -62,7 +62,7 @@ class HuggingFaceAutoLM(TokenLM):
         self._user_defined_max_generation_length = user_defined_max_generation_length
         self._max_length = max_length
         self._config = transformers.AutoConfig.from_pretrained(pretrained)
-        
+
         self.tokenizer = self._create_auto_tokenizer(
             pretrained=pretrained,
             revision=revision,
@@ -165,7 +165,7 @@ class HuggingFaceAutoLM(TokenLM):
         return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
 
     def greedy_until(
-        self, 
+        self,
         context_inputs,
         stop_sequences,
         max_generation_length,
@@ -213,7 +213,9 @@ class AutoCausalLM(HuggingFaceAutoLM):
         self, inputs: TokenSequence, max_tokens: int, stop: Optional[List[str]] = None
     ) -> TokenSequence:
         stopping_criteria = stop_sequences_criteria(self.tokenizer, stop)
-        generations = self.model.generate(
+        # TODO: Unwrapping the model here is not a general solution
+        # if we want parallelism support through FSDP or DeepSpeed.
+        generations = self.model.module.generate(
             **inputs,
             # GPT style models require the `generate` `max_length` arg to include the
             # context length, so we instead set `max_new_tokens` which is the number
@@ -221,7 +223,7 @@ class AutoCausalLM(HuggingFaceAutoLM):
             max_new_tokens=max_tokens,
             stopping_criteria=stopping_criteria,
             do_sample=False,
-            synced_gpus=True
+            synced_gpus=True,
         )
         return utils.select_continuation_from_batch_left_padding(
             generations, max_context_size=inputs["input_ids"].size(1)
@@ -253,57 +255,57 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
     ) -> List[Tuple[float, bool]]:
         return self._loglikelihood_tokens(context_inputs, target_inputs, decoder_inputs)
 
-    def loglikelihood_rolling(self, requests: List[Tuple[str, str]]) -> List[float]:
+    def loglikelihood_rolling(self, context_inputs) -> List[float]:
         loglikelihoods = []
-        for (string,) in tqdm(requests):
-            rolling_token_windows = list(
-                map(
-                    utils.make_disjoint_window,
-                    utils.get_rolling_token_windows(
-                        token_list=self.tok_encode(string),
-                        prefix_token=self.eot_token_id,
-                        max_seq_len=self.max_length,
-                        context_len=1,
-                    ),
-                )
-            )
-            contexts, conts = utils.split_and_pad_windows(
-                rolling_token_windows,
-                pad_token_id=self.eot_token_id,
-                max_seq_len=self.max_length,
-            )
-            # Manually create BatchEncoding tensors with attention masks as
-            # expected by `self._model_call` in `self._loglikelihood_tokens`.
-            contexts_enc = torch.Tensor(contexts).long()
-            contexts_enc = transformers.tokenization_utils_base.BatchEncoding(
-                {
-                    "input_ids": contexts_enc,
-                    "attention_mask": (contexts_enc != self.eot_token_id).long(),
-                }
-            )
-            conts_enc = torch.Tensor(conts).long()
-            conts_enc = transformers.tokenization_utils_base.BatchEncoding(
-                {
-                    "input_ids": conts_enc,
-                    "attention_mask": (conts_enc != self.eot_token_id).long(),
-                }
-            )
-            # TODO: Extract out this call so it only gets called once and also
-            # somehow figure out partial caching for.
-            rolling_token_windows_request = [
-                ((contexts, conts), contexts_enc, conts_enc)
-            ]
-            string_nll = self._loglikelihood_tokens(
-                rolling_token_windows_request, disable_tqdm=True
-            )
-            string_nll = [x[0] for x in string_nll]  # discard is_greedy
-            string_nll = sum(string_nll)
-            loglikelihoods.append(string_nll)
+        # for (string,) in tqdm(requests):
+        #     rolling_token_windows = list(
+        #         map(
+        #             utils.make_disjoint_window,
+        #             utils.get_rolling_token_windows(
+        #                 token_list=self.tok_encode(string),
+        #                 prefix_token=self.eot_token_id,
+        #                 max_seq_len=self.max_length,
+        #                 stride=1,
+        #             ),
+        #         )
+        #     )
+        #     contexts, conts = utils.split_and_pad_windows(
+        #         rolling_token_windows,
+        #         pad_token_id=self.eot_token_id,
+        #         max_seq_len=self.max_length,
+        #     )
+        #     # Manually create BatchEncoding tensors with attention masks as
+        #     # expected by `self._model_call` in `self._loglikelihood_tokens`.
+        #     contexts_enc = torch.Tensor(contexts).long()
+        #     contexts_enc = transformers.tokenization_utils_base.BatchEncoding(
+        #         {
+        #             "input_ids": contexts_enc,
+        #             "attention_mask": (contexts_enc != self.eot_token_id).long(),
+        #         }
+        #     )
+        #     conts_enc = torch.Tensor(conts).long()
+        #     conts_enc = transformers.tokenization_utils_base.BatchEncoding(
+        #         {
+        #             "input_ids": conts_enc,
+        #             "attention_mask": (conts_enc != self.eot_token_id).long(),
+        #         }
+        #     )
+        #     # TODO: Extract out this call so it only gets called once and also
+        #     # somehow figure out partial caching for.
+        #     rolling_token_windows_request = [
+        #         ((contexts, conts), contexts_enc, conts_enc)
+        #     ]
+        #     string_nll = self._loglikelihood_tokens(
+        #         rolling_token_windows_request, disable_tqdm=True
+        #     )
+        #     string_nll = [x[0] for x in string_nll]  # discard is_greedy
+        #     string_nll = sum(string_nll)
+        #     loglikelihoods.append(string_nll)
         return loglikelihoods
 
     def _loglikelihood_tokens(
         self,
-        context_inputs, # :List[Tuple[Tuple[str, str], TokenSequence, TokenSequence]],
+        context_inputs,  # :List[Tuple[Tuple[str, str], TokenSequence, TokenSequence]],
         target_inputs,
         decoder_inputs,
         disable_tqdm: Optional[bool] = False,
@@ -329,7 +331,9 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
             log_softmax = log_softmax[:length]
             target_tokens = target_tokens[:length]
             greedy_tokens = log_softmax.argmax(dim=-1)
-            exact_match = (greedy_tokens == target_tokens).all().unsqueeze(0).to(torch.bool)
+            exact_match = (
+                (greedy_tokens == target_tokens).all().unsqueeze(0).to(torch.bool)
+            )
             target_logits = torch.gather(
                 log_softmax, 1, target_tokens.unsqueeze(-1)
             ).squeeze(-1)
@@ -356,10 +360,13 @@ class AutoSeq2SeqLM(HuggingFaceAutoLM):
         )
         return generations
 
+
 class MultiTokenEOSCriteria(transformers.StoppingCriteria):
     """Criteria to stop on the specified multi-token sequence ids."""
 
-    def __init__(self, sequence_ids: List[int], tokenizer: transformers.PreTrainedTokenizer):
+    def __init__(
+        self, sequence_ids: List[int], tokenizer: transformers.PreTrainedTokenizer
+    ):
         self.sequence_ids = sequence_ids
         self.sequence_ids_len = len(self.sequence_ids) + 1
         self.sequence = tokenizer.decode(sequence_ids)

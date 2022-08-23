@@ -724,6 +724,7 @@ class PerplexityTask(PromptSourceTask):
         self, doc: dict, results: list
     ) -> Union[dict, Tuple[dict, dict]]:
         (loglikelihood,) = results
+        loglikelihood = loglikelihood.item()
         target = self.doc_to_target(doc)[0]
         words = self.count_words(target)
         bytes_ = self.count_bytes(target)

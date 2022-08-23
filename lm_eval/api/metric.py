@@ -131,8 +131,12 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
     return max(scores_for_ground_truths)
 
 
-def perplexity(items):
-    return math.exp(-mean(items))
+def perplexity(nll):
+    return math.exp(mean(nll))
+
+
+def weighted_perplexity(nll):
+    return math.exp(weighted_mean(nll))
 
 
 def weighted_mean(items):
@@ -140,12 +144,8 @@ def weighted_mean(items):
     return sum(a) / sum(b)
 
 
-def weighted_perplexity(items):
-    return math.exp(-weighted_mean(items))
-
-
 def bits_per_byte(items):
-    return -weighted_mean(items) / math.log(2)
+    return weighted_mean(items) / math.log(2)
 
 
 def sari(sentence_to_simplifiy, generated_sentence, references):

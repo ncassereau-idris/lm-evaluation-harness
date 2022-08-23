@@ -1,27 +1,24 @@
-from requests import request
 import transformers
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from typing import Any, Optional, List, Tuple
 
 
 REQUEST_RETURN_LENGTHS = {
     "loglikelihood": 2,
     "greedy_until": 1,
-    "loglikelihood_rolling": None,
+    "loglikelihood_rolling": 1,
 }
 
 
 class RequestDataset(Dataset):
-    def __init__(
-        self,
-        request_type: str,
-        requests: List[Tuple[str, 'Request']],
-        model 
-    ):
+    def __init__(self, request_type: str, requests: List[Tuple[str, "Request"]], model):
         # self.requests: List[(request_type, list[Request])]
-        assert len({r.request_type for r in requests}) == 1 and request_type == requests[0].request_type
-        self.request_type = request_type  
+        assert (
+            len({r.request_type for r in requests}) == 1
+            and request_type == requests[0].request_type
+        )
+        self.request_type = request_type
         self.requests = requests
         self.model = model
 
@@ -35,10 +32,19 @@ class RequestDataset(Dataset):
             request = self.requests[idx][1]
 
         request_data = {
-            'unique_request_id': torch.tensor([request.unique_request_id]), 
-            'doc_id': torch.tensor([request.doc_id]), 
+            "unique_request_id": torch.tensor([request.unique_request_id]),
+            "doc_id": torch.tensor([request.doc_id]),
         }
-
+        if self.request_type == "loglikelihood_rolling":
+            target = request.args
+            # NOTE: Padding-side should be agnostic for Seq2Seq models.
+            self.model.tokenizer.padding_side = "right"
+            print("pre-tokenization target inputs:\n", target[0])
+            target_inputs = self.model.tok_encode(target[0])
+            return {
+                **request_data,
+                "target_inputs": target_inputs,
+            }
         if self.request_type == "loglikelihood":
             context, target = request.args
             # NOTE: Padding-side should be agnostic for Seq2Seq models.
@@ -48,14 +54,14 @@ class RequestDataset(Dataset):
             decoder_inputs = context + target
             decoder_input_tokens = self.model.tok_encode(decoder_inputs)
             decoder_inputs = {
-                k: v[:-1][-self.model.max_length:]
+                k: v[:-1][-self.model.max_length :]
                 for k, v in decoder_input_tokens.items()
             }
             return {
                 **request_data,
-                'context_inputs': context_inputs,
-                'target_inputs': target_inputs,
-                'decoder_inputs': decoder_inputs,
+                "context_inputs": context_inputs,
+                "target_inputs": target_inputs,
+                "decoder_inputs": decoder_inputs,
             }
         elif self.request_type == "greedy_until":
             # NOTE: Padding-side should be agnostic for Seq2Seq models.
@@ -64,23 +70,26 @@ class RequestDataset(Dataset):
             context_inputs_tokenized = self.model.tok_encode(context)
             context_inputs = {}
             for k, v in context_inputs_tokenized.items():
-                context_inputs[k] = v[self.model.user_defined_max_generation_length - self.model.max_length:]
+                context_inputs[k] = v[
+                    self.model.user_defined_max_generation_length
+                    - self.model.max_length :
+                ]
             # TODO: Find a better way to handle stop sequences for 0-shot.
-            if args['stop_sequences'] is None or args['num_fewshot'] == 0:
+            if args["stop_sequences"] is None or args["num_fewshot"] == 0:
                 stop_sequences = [self.model.eot_token]
             else:
-                stop_sequences = args['stop_sequences'] + [self.model.eot_token]
-            
-            if args['max_generation_length'] is None:
+                stop_sequences = args["stop_sequences"] + [self.model.eot_token]
+
+            if args["max_generation_length"] is None:
                 max_tokens = self.model.user_defined_max_generation_length
             else:
-                max_tokens = args['max_generation_length']
+                max_tokens = args["max_generation_length"]
             return {
                 **request_data,
-                'context_inputs': context_inputs,
-                'stop_sequences': self.model.tok_encode(stop_sequences)['input_ids'],
-                'num_fewshot': torch.tensor([args['num_fewshot']]),
-                'max_generation_length': torch.tensor([max_tokens]),
+                "context_inputs": context_inputs,
+                "stop_sequences": self.model.tok_encode(stop_sequences)["input_ids"],
+                "num_fewshot": torch.tensor([args["num_fewshot"]]),
+                "max_generation_length": torch.tensor([max_tokens]),
             }
 
 
@@ -90,45 +99,57 @@ class RequestCollator:
         self.request_type = request_type
 
     def __call__(self, samples):
-        unique_request_id_batch = [sample['unique_request_id'] for sample in samples]
-        doc_id_batch = [sample['doc_id'] for sample in samples]
-
-        context_tokens = [sample['context_inputs'] for sample in samples]
-        context_batch = self.collator(context_tokens)
-        
+        unique_request_id_batch = [sample["unique_request_id"] for sample in samples]
+        doc_id_batch = [sample["doc_id"] for sample in samples]
         request_batch = {
-            'unique_request_id': torch.cat(unique_request_id_batch, dim=0),
-            'doc_id': torch.cat(doc_id_batch, dim=0),
-            'context_inputs': context_batch,
+            "unique_request_id": torch.cat(unique_request_id_batch, dim=0),
+            "doc_id": torch.cat(doc_id_batch, dim=0),
         }
-        if self.request_type == "loglikelihood":
-            target_tokens = [sample['target_inputs'] for sample in samples]
+        if self.request_type == "loglikelihood_rolling":
+            target_tokens = [sample["target_inputs"] for sample in samples]
             target_batch = self.collator(target_tokens)
-            decoder_input_tokens = [sample['decoder_inputs'] for sample in samples]
+            return {
+                **request_batch,
+                "target_inputs": target_batch,
+            }
+        elif self.request_type == "loglikelihood":
+            context_tokens = [sample["context_inputs"] for sample in samples]
+            context_batch = self.collator(context_tokens)
+            target_tokens = [sample["target_inputs"] for sample in samples]
+            target_batch = self.collator(target_tokens)
+            decoder_input_tokens = [sample["decoder_inputs"] for sample in samples]
             decoder_tokens_batch = self.collator(decoder_input_tokens)
             return {
                 **request_batch,
-                'target_inputs': target_batch,
-                'decoder_inputs': decoder_tokens_batch
+                "context_inputs": context_batch,
+                "target_inputs": target_batch,
+                "decoder_inputs": decoder_tokens_batch,
             }
         elif self.request_type == "greedy_until":
+            context_tokens = [sample["context_inputs"] for sample in samples]
+            context_batch = self.collator(context_tokens)
             return {
                 **request_batch,
-                'stop_sequences': torch.tensor(samples[0]['stop_sequences']),
-                'num_fewshot': torch.tensor(samples[0]['num_fewshot']),
-                'max_generation_length': torch.tensor(samples[0]['max_generation_length']),
+                "context_inputs": context_batch,
+                "stop_sequences": torch.tensor(samples[0]["stop_sequences"]),
+                "num_fewshot": torch.tensor(samples[0]["num_fewshot"]),
+                "max_generation_length": torch.tensor(
+                    samples[0]["max_generation_length"]
+                ),
             }
-        raise NotImplementedError("Request type {} not implemented".format(self.request_type))
+        raise NotImplementedError(
+            "Request type {} not implemented".format(self.request_type)
+        )
 
 
 class Request:
     def __init__(
-        self, 
+        self,
         request_type: str,
         args: Optional[Any] = None,
         index: Optional[int] = None,
         unique_request_id: int = None,
-        doc_id: int = None
+        doc_id: int = None,
     ):
         if request_type not in REQUEST_RETURN_LENGTHS.keys():
             raise NotImplementedError(
@@ -144,12 +165,20 @@ class Request:
         if REQUEST_RETURN_LENGTHS[self.request_type] is None:
             raise IndexError("This request type does not return multiple arguments!")
         for return_index in range(REQUEST_RETURN_LENGTHS[self.request_type]):
-            yield Request(self.request_type, self.args, return_index, self.unique_request_id, self.doc_id)
+            yield Request(
+                self.request_type,
+                self.args,
+                return_index,
+                self.unique_request_id,
+                self.doc_id,
+            )
 
     def __getitem__(self, i: int):
         if REQUEST_RETURN_LENGTHS[self.request_type] is None:
             raise IndexError("This request type does not return multiple arguments!")
-        return Request(self.request_type, self.args, i, self.unique_request_id, self.doc_id)
+        return Request(
+            self.request_type, self.args, i, self.unique_request_id, self.doc_id
+        )
 
     def __eq__(self, other: "Request"):
         return (

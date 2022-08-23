@@ -158,47 +158,61 @@ class TokenLM(LM):
         pass
 
     def loglikelihood(
-        self, context_inputs, target_inputs, decoder_inputs,
+        self,
+        context_inputs,
+        target_inputs,
+        decoder_inputs,
     ) -> List[Tuple[float, bool]]:
         return self._loglikelihood_tokens(
             context_inputs,
-            target_inputs, 
+            target_inputs,
             decoder_inputs,
         )
 
-    def loglikelihood_rolling(self, requests: List[Tuple[str, str]]) -> List[float]:
+    def loglikelihood_rolling(
+        self,
+        target_inputs,
+    ) -> List[float]:
         # TODO: Fix this.
 
         # TODO: Implement caching once we've confirmed the perplexity implementation
         # TODO: Automatic batch size detection for vectorization
-        loglikelihoods = []
-        for (string,) in tqdm(requests):
-            rolling_token_windows = list(
-                map(
-                    utils.make_disjoint_window,
-                    utils.get_rolling_token_windows(
-                        token_list=self.tok_encode(string),
-                        prefix_token=self.eot_token_id,
-                        max_seq_len=self.max_length,
-                        context_len=1,
-                    ),
-                )
-            )
-            rolling_token_windows = [(None,) + x for x in rolling_token_windows]
-            # TODO: Extract out this call so it only gets called once and
-            # also somehow figure out partial caching for that.
-            string_nll = self._loglikelihood_tokens(
-                rolling_token_windows, disable_tqdm=True
-            )
-            # Discard `is_greedy`
-            string_nll = [x[0] for x in string_nll]
-            string_nll = sum(string_nll)
-            loglikelihoods.append(string_nll)
-        return loglikelihoods
+        batch_nll_results = []
+        # Batch
+        for target_input, attention_mask in zip(
+            target_inputs["input_ids"], target_inputs["attention_mask"]
+        ):
+            stride_nll_results = []
+            input_len = attention_mask.sum().item()
+            target_input_ids = torch.cat(
+                [
+                    torch.tensor(
+                        [self.tokenizer.bos_token_id], dtype=torch.long
+                    ).cuda(),
+                    target_input[:input_len],
+                ]
+            ).long()
+            # Stride
+            if input_len > self.max_length:
+                stride = self.max_length // 2
+            else:
+                stride = self.max_length
+            for i in range(0, target_input_ids.size(0), stride):
+                begin_loc = max(i + stride - self.max_length, 0)
+                end_loc = min(i + stride, target_input_ids.size(0))
+                target_len = end_loc - i
+                input_ids = target_input_ids[begin_loc:end_loc]
+                target_ids = input_ids.clone()
+                target_ids[:-target_len] = -100
+                loss = self.model(input_ids=input_ids, labels=target_ids)["loss"]
+                stride_nll = loss * target_len
+                stride_nll_results.append(stride_nll)
+            batch_nll_results.append(torch.stack(stride_nll_results).sum().unsqueeze(0))
+        return torch.cat(batch_nll_results, dim=0)
 
     def _loglikelihood_tokens(
         self,
-        context_inputs, # :List[Tuple[Tuple[str, str], TokenSequence, TokenSequence]],
+        context_inputs,  # :List[Tuple[Tuple[str, str], TokenSequence, TokenSequence]],
         target_inputs,
         decoder_inputs,
         disable_tqdm: Optional[bool] = False,
@@ -231,20 +245,26 @@ class TokenLM(LM):
         log_softmaxes = F.log_softmax(
             # shape: [batch, seq_len]
             self._model_call(decoder_inputs),
-            dim=-1
+            dim=-1,
         )  # [batch, padding_length, vocab]
 
         logprobs_results = []
         exact_match_results = []
         for i, log_softmax in enumerate(log_softmaxes):
-            target_length = target_inputs['attention_mask'][i].sum().item()
-            context_length = context_inputs['attention_mask'][i].sum().item()
-            target_logits = log_softmax[(context_length - 1) : (target_length + context_length - 1)]
-            target_tokens = target_inputs['input_ids'][i][:target_length].unsqueeze(0)
+            target_length = target_inputs["attention_mask"][i].sum().item()
+            context_length = context_inputs["attention_mask"][i].sum().item()
+            target_logits = log_softmax[
+                (context_length - 1) : (target_length + context_length - 1)
+            ]
+            target_tokens = target_inputs["input_ids"][i][:target_length].unsqueeze(0)
             greedy_tokens = target_logits.argmax(dim=-1)
-            exact_match = (greedy_tokens == target_tokens).all().unsqueeze(0).to(torch.bool)
+            exact_match = (
+                (greedy_tokens == target_tokens).all().unsqueeze(0).to(torch.bool)
+            )
             target_logits = target_logits.unsqueeze(0)  # shape: [1, seq_len, vocab]
-            logprob_per_token = torch.gather(target_logits, 2, target_tokens.unsqueeze(-1)).squeeze(-1)
+            logprob_per_token = torch.gather(
+                target_logits, 2, target_tokens.unsqueeze(-1)
+            ).squeeze(-1)
             logprobs = logprob_per_token.sum().unsqueeze(0)
             logprobs_results.append(logprobs)
             exact_match_results.append(exact_match)
@@ -253,7 +273,6 @@ class TokenLM(LM):
         #         if cache_key is not None:
         #             self.cache_hook.add_partial("loglikelihood", cache_key, answer)
         #         results.append(answer)
- 
 
     @abc.abstractmethod
     def _model_call(

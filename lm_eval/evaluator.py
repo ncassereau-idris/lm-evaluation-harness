@@ -8,7 +8,7 @@ from tqdm import tqdm
 from typing import List, Optional, Tuple
 
 from torch.utils.data import Dataset, DataLoader
-from accelerate import Accelerator 
+from accelerate import Accelerator
 from dataclasses import dataclass
 
 
@@ -83,9 +83,7 @@ def cli_evaluate(
          Dictionary of results
     """
     tasks = lm_eval.tasks.get_task_list(task_name, template_names)
-    model = lm_eval.models.get_model_from_args_string(
-        model_api_name, model_args
-    )
+    model = lm_eval.models.get_model_from_args_string(model_api_name, model_args)
 
     if use_cache:
         cache_args = model_args.replace("=", "-").replace(",", "_").replace("/", "-")
@@ -211,11 +209,18 @@ def evaluate(
                 # doc_id: Unique id that we can get back to a doc using `docs`
                 request_return_index = req.index
                 requests_origin[req.request_type].append(
-                    (i, task_template_key, doc, doc_id, fewshotex_logging_info, request_return_index)
+                    (
+                        i,
+                        task_template_key,
+                        doc,
+                        doc_id,
+                        fewshotex_logging_info,
+                        request_return_index,
+                    )
                 )
         # Store the task version.
         versions[task_template_key] = task.VERSION
-    
+
     requests_datasets = {
         request_type: RequestDataset(request_type, request_list, model)
         for request_type, request_list in requests.items()
@@ -223,15 +228,15 @@ def evaluate(
 
     requests_data_loaders = {
         request_type: DataLoader(
-            dataset, 
+            dataset,
             collate_fn=RequestCollator(
                 request_type=request_type,
                 tokenizer=model.tokenizer,
                 # TODO: probably should set padding_side here
                 padding=True,
             ),
-            batch_size=batch_size, 
-            shuffle=False
+            batch_size=batch_size,
+            shuffle=False,
         )
         for request_type, dataset in requests_datasets.items()
     }
@@ -257,33 +262,43 @@ def evaluate(
             # end up next to each other.
             logger.info(f"\n» Running all `{request_type}` requests")
             # TODO: Make sure all requests are the same type for the given `request_type`
-            if request_type == "loglikelihood":
-                # print('request_batch', request_batch)
+            if request_type == "loglikelihood_rolling":
+                responses = model.loglikelihood_rolling(
+                    request_batch["target_inputs"],
+                )
+            elif request_type == "loglikelihood":
                 responses = model.loglikelihood(
-                    request_batch['context_inputs'],
-                    request_batch['target_inputs'],
-                    request_batch['decoder_inputs'],
+                    request_batch["context_inputs"],
+                    request_batch["target_inputs"],
+                    request_batch["decoder_inputs"],
                 )
-                # print('LOGLIKELIHOOD RESULTS', responses)
             elif request_type == "greedy_until":
-                # model.model = accelerator.unwrap_model(model.model)
                 responses = model.greedy_until(
-                    request_batch['context_inputs'],
-                    request_batch['stop_sequences'],
-                    request_batch['max_generation_length'],
+                    request_batch["context_inputs"],
+                    request_batch["stop_sequences"],
+                    request_batch["max_generation_length"],
                 )
-                # accelerator.print('GREEDY UNTIL RESULTS', responses.shape)
             else:
-                raise NotImplementedError(f"Request type '{request_type}' not implemented")
+                raise NotImplementedError(
+                    f"Request type '{request_type}' not implemented"
+                )
 
             if accelerator.use_distributed:
-                request_batch['doc_id'] = accelerator.gather(request_batch['doc_id'].squeeze())
-                request_batch['unique_request_id'] = accelerator.gather(request_batch['unique_request_id'].squeeze())
+                request_batch["doc_id"] = accelerator.gather(
+                    request_batch["doc_id"].squeeze()
+                )
+                request_batch["unique_request_id"] = accelerator.gather(
+                    request_batch["unique_request_id"].squeeze()
+                )
                 if request_type == "loglikelihood":
-                    responses = accelerator.gather(responses[0]), accelerator.gather(responses[1])
+                    responses = accelerator.gather(responses[0]), accelerator.gather(
+                        responses[1]
+                    )
                     if step == len(requests_data_loader) - 1:
                         # Last batch needs to be truncated on distributed systems as it contains additional samples
-                        responses = responses[: len(requests_data_loader.dataset) - samples_seen]
+                        responses = responses[
+                            : len(requests_data_loader.dataset) - samples_seen
+                        ]
                     else:
                         # Otherwise we add the number of samples seen
                         samples_seen += len(responses)
@@ -295,7 +310,7 @@ def evaluate(
             if request_type == "greedy_until":
                 split_responses = []
                 for response in responses:
-                    for stop_sequence in request_batch['stop_sequences']:
+                    for stop_sequence in request_batch["stop_sequences"]:
                         stop_sequence = stop_sequence.tolist()
                         stop_sequence_string = model.tokenizer.decode(stop_sequence)
                         response = response.split(stop_sequence_string)[0]
@@ -304,15 +319,28 @@ def evaluate(
                     split_responses.append(response)
                 responses = split_responses
                 # accelerator.print('GREEDY UNTIL RESPONSES', responses)
-            if request_type == 'loglikelihood':  # TODO: This may effect the `loglikelihood_rolling` responses.
-                responses = list(zip(*responses))  # Tuple 
-            # accelerator.print(f'zip resposnes :', responses)
-            for unique_request_id, doc_id, response in zip(request_batch['unique_request_id'], request_batch['doc_id'], responses):
-                (i, task_template_key, doc, origin_doc_id, fewshotex_logging_info, request_return_index) = \
-                    requests_origin[request_type][unique_request_id]
-                                
+            if (
+                request_type == "loglikelihood"
+            ):  # TODO: This may effect the `loglikelihood_rolling` responses.
+                responses = list(zip(*responses))  # Tuple
+            for unique_request_id, doc_id, response in zip(
+                request_batch["unique_request_id"], request_batch["doc_id"], responses
+            ):
+                (
+                    i,
+                    task_template_key,
+                    doc,
+                    origin_doc_id,
+                    fewshotex_logging_info,
+                    request_return_index,
+                ) = requests_origin[request_type][unique_request_id]
+
                 assert doc_id == origin_doc_id
-                response = response[request_return_index] if request_return_index is not None else response
+                response = (
+                    response[request_return_index]
+                    if request_return_index is not None
+                    else response
+                )
                 if isinstance(response, torch.Tensor):
                     response = response.cpu()
                 process_response_queue[(task_template_key, int(doc_id))].append(
@@ -324,12 +352,12 @@ def evaluate(
     for (task_template_key, doc_id), per_doc_requests in process_response_queue.items():
         # accelerator.print(f'per_doc_reequest:', per_doc_requests)
         # print(f'per_doc_reequest:', per_doc_requests[0])
-        request_batch['unique_request_id'] = set()
+        request_batch["unique_request_id"] = set()
         filtered_per_doc_requests = []
         for per_doc_request in per_doc_requests:
-            if per_doc_request[-1].item() not in request_batch['unique_request_id']:
+            if per_doc_request[-1].item() not in request_batch["unique_request_id"]:
                 filtered_per_doc_requests.append(per_doc_request)
-                request_batch['unique_request_id'].add(per_doc_request[-1].item())
+                request_batch["unique_request_id"].add(per_doc_request[-1].item())
         per_doc_requests = filtered_per_doc_requests
         per_doc_requests.sort(key=lambda x: x[0])
 
@@ -339,7 +367,6 @@ def evaluate(
 
         task = task_dict[task_template_key]
         doc = docs[(task_template_key, doc_id)]
-
 
         output = task.process_results(doc, per_doc_results)
         if task.save_examples:

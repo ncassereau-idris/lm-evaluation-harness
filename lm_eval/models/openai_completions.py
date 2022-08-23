@@ -213,7 +213,9 @@ class OpenAICompletionsLM(TokenLM):
             inputs = []
             for context, _ in chunk:
                 context_enc = self.tok_encode(context)
-                input = context_enc[-(self.max_length - self.user_defined_max_generation_length) :]
+                input = context_enc[
+                    -(self.max_length - self.user_defined_max_generation_length) :
+                ]
                 inputs.append(input)
 
             responses = self._model_generate(

@@ -31,12 +31,22 @@ def test_llh_tasks():
     )
     return tasks
 
+
+def test_loglikehood_rolling():
+    tasks = lm_eval.get_task_list(
+        'flores_101_ppl',
+        template_names=['translate-this-zul-cat', 'translate-this-fra-eng', 'translate-this-fra-eng']
+    )
+    return tasks
+ 
+
 def test_greedy_tasks():
     tasks = lm_eval.get_task_list(
         'mrpc',
         template_names=['generate_sentence']
     )
     return tasks
+
 
 import argparse
 argparser = argparse.ArgumentParser()
@@ -45,9 +55,11 @@ args = argparser.parse_args()
 
 if __name__ == "__main__":
     accelerator = Accelerator()
-    model = lm_eval.get_model("hf-seq2seq", pretrained='google/t5-small-lm-adapt')
+    # model = lm_eval.get_model("hf-seq2seq", pretrained='google/t5-small-lm-adapt')
+    model = lm_eval.get_model("hf-causal", pretrained='gpt2')
     # tasks = test_greedy_tasks()
-    tasks = test_llh_tasks()
+    # tasks = test_llh_tasks()
+    tasks = test_loglikehood_rolling()
 
     if args.branch == 'master':
         results = lm_eval.evaluate(model=model, tasks=tasks)
