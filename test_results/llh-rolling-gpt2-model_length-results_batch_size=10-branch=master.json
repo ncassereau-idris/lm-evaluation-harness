@@ -1,0 +1,54 @@
+{
+  "results": [
+    {
+      "task_name": "flores_101_ppl",
+      "prompt_name": null,
+      "word_perplexity": 21898.476358951397
+    },
+    {
+      "task_name": "flores_101_ppl",
+      "prompt_name": null,
+      "byte_perplexity": 4.7645327227650185
+    },
+    {
+      "task_name": "flores_101_ppl",
+      "prompt_name": null,
+      "bits_per_byte": 2.252334730062539
+    },
+    {
+      "task_name": "flores_101_ppl",
+      "prompt_name": null,
+      "word_perplexity": 249765811525.88693
+    },
+    {
+      "task_name": "flores_101_ppl",
+      "prompt_name": null,
+      "byte_perplexity": 16.62511503743175
+    },
+    {
+      "task_name": "flores_101_ppl",
+      "prompt_name": null,
+      "bits_per_byte": 4.055292418259572
+    }
+  ],
+  "versions": {
+    "flores_101_ppl+translate-this-fra-eng": 0,
+    "flores_101_ppl+translate-this-zul-cat": 0
+  },
+  "table_results": {
+    "flores_101_ppl+translate-this-fra-eng": {
+      "task_name": "flores_101_ppl",
+      "prompt_name": "translate-this-fra-eng",
+      "word_perplexity": 21898.476358951397,
+      "byte_perplexity": 4.7645327227650185,
+      "bits_per_byte": 2.252334730062539
+    },
+    "flores_101_ppl+translate-this-zul-cat": {
+      "task_name": "flores_101_ppl",
+      "prompt_name": "translate-this-zul-cat",
+      "word_perplexity": 249765811525.88693,
+      "byte_perplexity": 16.62511503743175,
+      "bits_per_byte": 4.055292418259572
+    }
+  }
+}
