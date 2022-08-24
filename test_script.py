@@ -62,9 +62,9 @@ if __name__ == "__main__":
     accelerator = Accelerator()
     # model = lm_eval.get_model("hf-seq2seq", pretrained='google/t5-small-lm-adapt')
     model = lm_eval.get_model("hf-causal", pretrained="gpt2")
-    # tasks = test_greedy_tasks()
+    tasks = test_greedy_tasks()
     # tasks = test_llh_tasks()
-    tasks = test_loglikehood_rolling()
+    # tasks = test_loglikehood_rolling()
 
     if args.branch == "master":
         results = lm_eval.evaluate(model=model, tasks=tasks)
