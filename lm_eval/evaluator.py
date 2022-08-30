@@ -304,12 +304,13 @@ def evaluate(
                         samples_seen += len(responses)
                 elif request_type == "greedy_until":
                     # TODO: Gather completions from greedy_until
-                    responses = accelerator.gather(responses)
-                    responses = model.tok_decode(responses.tolist())
+                    responses = accelerator.gather(responses).tolist()
 
             if request_type == "greedy_until":
+                responses = model.tok_decode(responses)
                 split_responses = []
                 for response in responses:
+                    print(response)
                     for stop_sequence in request_batch["stop_sequences"]:
                         stop_sequence = stop_sequence.tolist()
                         stop_sequence_string = model.tokenizer.decode(stop_sequence)
@@ -318,7 +319,6 @@ def evaluate(
                     # self.cache_hook.add_partial("greedy_until", (context, until), response)
                     split_responses.append(response)
                 responses = split_responses
-                # accelerator.print('GREEDY UNTIL RESPONSES', responses)
             if (
                 request_type == "loglikelihood"
             ):  # TODO: This may effect the `loglikelihood_rolling` responses.
