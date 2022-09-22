@@ -1,261 +1,233 @@
 import collections
 import itertools
-import random
+import json
+import logging
+import numpy as np
+from tqdm import tqdm
+from typing import List, Optional
 
-import lm_eval.metrics
 import lm_eval.models
 import lm_eval.tasks
-import lm_eval.base
-from tqdm import tqdm
-
-from lm_eval.utils import positional_deprecated, run_task_tests, set_seed
-
-import logging, json
+import lm_eval.api.metric
+import lm_eval.api.model
+from lm_eval.api.utils import DEFAULT_SEED, set_seed
+from lm_eval.api.task import Task
 
 
-@positional_deprecated
-def simple_evaluate(
-    model,
-    model_args=None,
-    tasks=[],
-    num_fewshot=0,
-    batch_size=None,
-    device=None,
-    no_cache=False,
-    limit=None,
-    bootstrap_iters=100000,
-    description_dict=None,
-    check_integrity=False,
-    seed=1234,
-    parallelize=False,
-):
-    """Instantiate and evaluate a model on a list of tasks.
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
-    :param model: Union[str, LM]
-        Name of model or LM object, see lm_eval.models.get_model
-    :param model_args: Optional[str]
-        String arguments for each model class, see LM.create_from_arg_string.
-        Ignored if `model` argument is a LM object.
-    :param tasks: list[Union[str, Task]]
-        List of task names or Task objects. Task objects will be taken to have name task.EVAL_HARNESS_NAME if defined and type(task).__name__ otherwise.
-    :param num_fewshot: int
-        Number of examples in few-shot context
-    :param batch_size: int, optional
-        Batch size for model
-    :param device: str, optional
-        PyTorch device (e.g. "cpu" or "cuda:0") for running models
-    :param no_cache: bool
-        Whether or not to cache
-    :param limit: int, optional
-        Limit the number of examples per task (only use this for testing)
-    :param bootstrap_iters:
-        Number of iterations for bootstrap statistics
-    :param description_dict: dict[str, str]
-        Dictionary of custom task descriptions of the form: `task_name: description`
-    :param check_integrity: bool
-        Whether to run the relevant part of the test suite for the tasks
-    :param seed: int
-        Random seed.
-    :param parallelize: bool
-        Whether to parallelize the model across gpus.
-    :return
-        Dictionary of results
+
+def cli_evaluate(
+    *,
+    model_api_name: str,
+    model_args: str,
+    task_name: str,
+    template_names: List[str],
+    num_fewshot: Optional[int] = 0,
+    batch_size: Optional[int] = None,
+    device: Optional[str] = None,
+    use_cache: Optional[bool] = False,
+    bootstrap_iters: Optional[int] = 100000,
+    seed: Optional[int] = DEFAULT_SEED,
+    limit: Optional[int] = None,
+) -> dict:
+    """Evaluate a model from an api on a given task with multiple possible prompt
+    formats. This is effectively a wrapper around `evaluate` for command-line
+    interface (CLI) like usage; only primitive type arguments.
+
+    Args:
+        model_api_name (str):
+            Name of the language model api to use. See:
+                `lm_eval.models.list_model_apis`
+        model_args (str):
+            String arguments for the model api. See:
+                `lm_eval.api.model.get_model_from_args_string`
+        task_name (str):
+            The task name of the task to evaluate the model on.
+        template_names (List[str]):
+            List of template names for the specified `task_name` to evaluate
+            under.
+        num_fewshot (int, optional, defaults to 0):
+            Number of examples in few-shot context.
+        batch_size (int, optional, defaults to None):
+            Batch size to use for model evaluation.
+        device (str, optional, defaults to None):
+            PyTorch device (e.g. "cpu" or "cuda:0") for running models.
+        use_cache (bool, optional, defaults to False):
+            Whether or not to use a cache for language model results.
+        bootstrap_iters (int, optional, defaults to 100000):
+            Number of iterations for bootstrap statistics.
+        seed (int, optional, defaults to 1234 = `DEFAULT_SEED`):
+            Seed for pseudo-random number generation. This controls document
+            shuffling, few-shot prompt selection, and framework seeding.
+        limit (int, optional, defaults to None):
+            Limit the number of examples per task (only use this for testing).
+
+    Returns:
+        Dictionary of results.
     """
-    set_seed(seed)
-    assert tasks != [], "No tasks specified"
-
-    if isinstance(model, str):
-        if model_args is None:
-            model_args = ""
-        lm = lm_eval.models.get_model(model).create_from_arg_string(
-            model_args,
-            {"batch_size": batch_size, "device": device, "parallelize": parallelize},
-        )
-    else:
-        assert isinstance(model, lm_eval.base.LM)
-        lm = model
-
-    if not no_cache:
-        lm = lm_eval.base.CachingLM(
-            lm,
-            "lm_cache/"
-            + model
-            + "_"
-            + model_args.replace("=", "-").replace(",", "_").replace("/", "-")
-            + ".db",
-        )
-
-    task_dict = lm_eval.tasks.get_task_dict_promptsource(tasks)
-
-    if check_integrity:
-        run_task_tests(task_list=tasks)
-
-    results = evaluate(
-        lm=lm,
-        task_dict=task_dict,
-        num_fewshot=num_fewshot,
-        limit=limit,
-        description_dict=description_dict,
+    tasks = lm_eval.tasks.get_task_list(task_name, template_names)
+    model = lm_eval.models.get_model_from_args_string(
+        model_api_name, model_args, {"batch_size": batch_size, "device": device}
     )
 
-    # add info about the model and few shot config
+    if use_cache:
+        cache_args = model_args.replace("=", "-").replace(",", "_").replace("/", "-")
+        # TODO: Make `cache_location` path configurable thru an environment var.
+        cache_location = f"lm_cache/{model_api_name}_{cache_args}.db"
+        model = lm_eval.api.model.CachingLM(model, cache_location)
+
+    results = evaluate(
+        model=model,
+        tasks=tasks,
+        num_fewshot=num_fewshot,
+        bootstrap_iters=bootstrap_iters,
+        seed=seed,
+        limit=limit,
+    )
+
+    # Add info about the model and few shot config.
     results["config"] = {
-        "model": model,
+        "model": model_api_name,
         "model_args": model_args,
         "num_fewshot": num_fewshot,
         "batch_size": batch_size,
         "device": device,
-        "no_cache": no_cache,
+        "use_cache": use_cache,
         "limit": limit,
         "bootstrap_iters": bootstrap_iters,
-        "description_dict": description_dict,
+        "seed": seed,
     }
-
     return results
 
 
-@positional_deprecated
 def evaluate(
-    lm,
-    task_dict,
-    provide_description=None,
-    num_fewshot=0,
-    limit=None,
-    bootstrap_iters=100000,
-    description_dict=None,
-):
+    *,
+    model: lm_eval.api.model.LM,
+    tasks: List[Task],
+    num_fewshot: Optional[int] = 0,
+    bootstrap_iters: Optional[int] = 100000,
+    seed: Optional[int] = DEFAULT_SEED,
+    limit: Optional[int] = None,
+) -> dict:
     """Instantiate and evaluate a model on a list of tasks.
 
-    :param lm: obj
-        Language Model
-    :param task_dict: dict[str, Task]
-        Dictionary of tasks. Tasks will be taken to have name task.EVAL_HARNESS_NAME if defined and type(task).__name__ otherwise.
-    :param provide_description: bool
-        Not implemented, and this option is deprecated and will be removed in a future version in favor of a different description providing method
-    :param num_fewshot: int
-        Number of examples in few-shot context
-    :param limit: int, optional
-        Limit the number of examples per task (only use this for testing)
-    :param bootstrap_iters:
-        Number of iterations for bootstrap statistics
-    :param description_dict: dict[str, str]
-        Dictionary of custom task descriptions of the form: `task_name: description`
-    :return
-        Dictionary of results
+    Args:
+        model (lm_eval.api.model.LM):
+            Language model API instance.
+        tasks (List[Task]):
+            List of tasks to evaluate `model` on.
+        num_fewshot (int, optional, defaults to 0):
+            Number of examples in the few-shot context.
+        bootstrap_iters (int, optional, defaults to 100000):
+            Number of iterations for bootstrap statistics.
+        seed (int, optional, defaults to 1234 = `DEFAULT_SEED`):
+            Seed for pseudo-random number generation. This controls document
+            shuffling, few-shot prompt selection, and framework seeding.
+        limit (int, optional, defaults to None):
+            Limit the number of examples per task.
+            WARNING: This is only for testing purposes.
+
+    Returns:
+        Dictionary of results.
     """
-    # TODO: completely refactor this entire function to not be a huge mess, ideally breaking it down into smaller pieces
+    set_seed(seed)
+    rng = np.random.default_rng(seed)
 
-    # TODO: todo: implement proper description-providing system
-    assert not provide_description  # not implemented.
-    if provide_description is not None:
-        # nudge people to not specify it at all
-        print(
-            "WARNING: provide_description is deprecated and will be removed in a future version in favor of description_dict"
-        )
-
-    task_dict_items = [
-        (name, task)
-        for name, task in task_dict.items()
-        if (task.has_validation_docs() or task.has_test_docs())
-    ]
+    # TODO: Completely refactor this entire function to not be a huge mess, ideally breaking it down into smaller pieces
+    task_dict = {}
+    for task in tasks:
+        if task.has_validation_docs() is False and task.has_test_docs() is False:
+            logger.info(
+                f"Ignoring Task: {lm_eval.tasks.get_registry_name_from_task(task)} has no validation or test docs"
+            )
+            continue
+        # Create unique keys for each task-template pair.
+        task_name = lm_eval.tasks.get_registry_name_from_task(task)
+        template_name = task.prompt_template.name if task.prompt_template else None
+        key = lm_eval.tasks._get_task_template_key(task_name, template_name)
+        task_dict[key] = task
 
     results = collections.defaultdict(dict)
     versions = collections.defaultdict(dict)
-
     requests = collections.defaultdict(list)
     requests_origin = collections.defaultdict(list)
 
-    # If we ever run into issues where the eval tasks don't fit in memory and we can't afford a machine with bigger
-    # memory, we can always modify this plumbing to support that, but I didn't want to include it just yet because
-    # over-engineering is bad (or we could make it write the requests to disk and then read them back out again
-    #  - probably using an sqlite db because of all the moving parts we have
-
-    # TODO: we need unit tests & sanity checks or something to ensure that the return of `validation_docs` is stable
+    # TODO: We need unit tests & sanity checks or something to ensure that the return of `validation_docs` is stable
     docs = {}
 
-    # get lists of each type of request
-    for task_prompt_name, task in task_dict_items:
-        versions[task_prompt_name] = task.VERSION
-        # default to test doc, fall back to val doc if validation unavailable
-        # TODO: the test-fallback-to-val system isn't final, we should revisit it at some point
-        if task.has_test_docs():
-            task_doc_func = task.test_docs
-        elif task.has_validation_docs():
-            task_doc_func = task.validation_docs
-        else:
-            raise RuntimeError("Task has neither test_docs nor validation_docs")
+    # Build contexts and collect language model requests.
+    for task_template_key, task in task_dict.items():
+        task_docs = task.evaluation_docs()
 
-        # deterministically shuffle docs and chop off the first `limit` because sometimes docs are in some kind of order
-        task_docs = list(enumerate(list(task_doc_func())))
-        rnd = random.Random()
-        rnd.seed(42)
-        rnd.shuffle(task_docs)
-
-        description = (
-            description_dict[task_prompt_name]
-            if description_dict and task_prompt_name in description_dict
-            else ""
+        logger.info(f"\n» Assigning unique IDs to '{task_template_key}' docs")
+        task_docs = task_docs.map(
+            lambda ex, idx: {**ex, "doc_id": idx}, with_indices=True
         )
 
-        print(f"Constructing '{task_prompt_name}' contexts and requests")
-        pbar_limit = len(task_docs) if not limit else limit
-        for doc_id, (original_doc_id, doc) in enumerate(
+        logger.info(f"» Filtering invalid docs from '{task_template_key}'")
+        task_docs = task_docs.filter(lambda d: not task.invalid_doc_for_prompt(d))
+        task_docs = task_docs.shuffle(generator=rng)
+
+        logger.info(f"» Constructing '{task_template_key}' contexts and requests")
+        pbar_limit = len(task_docs) if not limit else np.minimum(limit, len(task_docs))
+
+        for doc_id, doc in enumerate(
             tqdm(itertools.islice(task_docs, 0, limit), total=pbar_limit)
         ):
-            if task.invalid_doc_for_prompt(doc):
-                continue
-
-            docs[(task_prompt_name, doc_id)] = doc
+            docs[(task_template_key, doc_id)] = doc
             ctx, fewshotex_logging_info = task.fewshot_context(
-                doc=doc, num_fewshot=num_fewshot, rnd=rnd, description=description
+                doc=doc,
+                num_fewshot=num_fewshot,
+                rng=rng,
             )
-            fewshotex_logging_info["doc_id"] = original_doc_id
+            fewshotex_logging_info["doc_id"] = doc["doc_id"]
             args = {"num_fewshot": num_fewshot}
             reqs = task.construct_requests(doc, ctx, args)
             if not isinstance(reqs, (list, tuple)):
                 reqs = [reqs]
             for i, req in enumerate(reqs):
                 requests[req.request_type].append(req)
-                # i: index in requests for a single task instance
-                # doc_id: unique id that we can get back to a doc using `docs`
+                # i: Index in requests for a single task instance
+                # doc_id: Unique id that we can get back to a doc using `docs`
                 requests_origin[req.request_type].append(
-                    (i, task_prompt_name, doc, doc_id, fewshotex_logging_info)
+                    (i, task_template_key, doc, doc_id, fewshotex_logging_info)
                 )
+        # Store the task version.
+        versions[task_template_key] = task.VERSION
 
-    # all responses for each (task, doc)
-    process_res_queue = collections.defaultdict(list)
-
-    # execute each type of request
+    # All responses for each (task, doc)
+    process_response_queue = collections.defaultdict(list)
+    # Execute each type of request
     for reqtype, reqs in requests.items():
-        # TODO: right now, this code runs multiple separate LM requests for multiple Requests differing
-        #       only in index. We could implement some kind of caching, but that would be more of a band-aid
-        #       solution. we could also implement some kind of auto-grouping here;
-        #       they should end up next to each other.
-
-        print("Running", reqtype, "requests")
-        resps = getattr(lm, reqtype)([req.args for req in reqs])
+        # TODO: Right now, this code runs multiple separate LM requests for
+        # multiple Requests differing only in index. We could implement some
+        # kind of caching, but that would be more of a band-aid solution. We
+        # could also implement some kind of auto-grouping here; they should
+        # end up next to each other.
+        logger.info(f"\n» Running all `{reqtype}` requests")
+        resps = getattr(model, reqtype)([req.args for req in reqs])
         resps = [
             x if req.index is None else x[req.index] for x, req in zip(resps, reqs)
         ]
-
-        for resp, (i, task_prompt_name, doc, doc_id, fewshotex_logging_info) in zip(
+        for resp, (i, task_template_key, doc, doc_id, fewshotex_logging_info) in zip(
             resps, requests_origin[reqtype]
         ):
-            process_res_queue[(task_prompt_name, doc_id)].append(
+            process_response_queue[(task_template_key, doc_id)].append(
                 (i, resp, fewshotex_logging_info)
             )
 
+    # Unpack results and sort back in order and return control to Task
     vals = collections.defaultdict(list)
-
-    # unpack results and sort back in order and return control to Task
-    logger = logging.getLogger("examples")
-    for (task_prompt_name, doc_id), per_doc_requests in process_res_queue.items():
+    example_logger = logging.getLogger("examples")
+    for (task_template_key, doc_id), per_doc_requests in process_response_queue.items():
         per_doc_requests.sort(key=lambda x: x[0])
         per_doc_results = [x[1] for x in per_doc_requests]
         fewshot_logging_info = [x[2] for x in per_doc_requests][0]
 
-        task = task_dict[task_prompt_name]
-        doc = docs[(task_prompt_name, doc_id)]
+        task = task_dict[task_template_key]
+        doc = docs[(task_template_key, doc_id)]
 
         output = task.process_results(doc, per_doc_results)
 
@@ -263,25 +235,27 @@ def evaluate(
             metrics, example = output
             example.update(fewshot_logging_info)
             example.update(task.get_logging_info())
-            logger.info(json.dumps(example))
+            example_logger.info(json.dumps(example))
         else:
             metrics = output
             example = fewshot_logging_info
             example.update(task.get_logging_info())
-            logger.info(json.dumps(example))
+            example_logger.info(json.dumps(example))
 
         for metric, value in metrics.items():
-            vals[(task_prompt_name, metric)].append(value)
+            vals[(task_template_key, metric)].append(value)
 
-    # aggregate results
+    # Aggregate results
     metric_results = []
-    for (task_prompt_name, metric), items in vals.items():
-        task_name, prompt_name = task_prompt_name.split("+", 1)
+    for (task_template_key, metric), items in vals.items():
+        task_name, prompt_name = lm_eval.tasks._split_task_template_key(
+            task_template_key
+        )
 
-        results[task_prompt_name]["task_name"] = task_name
-        results[task_prompt_name]["prompt_name"] = prompt_name
-        task = task_dict[task_prompt_name]
-        results[task_prompt_name][metric] = task.aggregation()[metric](items)
+        results[task_template_key]["task_name"] = task_name
+        results[task_template_key]["prompt_name"] = prompt_name
+        task = task_dict[task_template_key]
+        results[task_template_key][metric] = task.aggregation()[metric](items)
 
         _metric_results = {
             "task_name": task_name,
@@ -289,17 +263,17 @@ def evaluate(
             metric: task.aggregation()[metric](items),
             **task.get_logging_info(),
         }
-
-        # hotfix: bleu, chrf, ter seem to be really expensive to bootstrap
-        # so we run them less iterations. still looking for a cleaner way to do this
-        stderr = lm_eval.metrics.stderr_for_metric(
+        # NOTE: bleu, chrf, ter seem to be really expensive to bootstrap
+        # so we run them less iterations.
+        # TODO: Find an efficient work around.
+        stderr = lm_eval.api.metric.stderr_for_metric(
             metric=task.aggregation()[metric],
             bootstrap_iters=min(bootstrap_iters, 1000)
             if metric in ["bleu", "chrf", "ter"]
             else bootstrap_iters,
         )
         if stderr is not None:
-            results[task_prompt_name][metric + "_stderr"] = stderr(items)
+            results[task_template_key][metric + "_stderr"] = stderr(items)
             _metric_results[metric + "_stderr"] = stderr(items)
         metric_results.append(_metric_results)
 
@@ -313,37 +287,36 @@ def evaluate(
     }
 
 
-def make_table(result_dict):
-    """Generate table of results."""
-    from pytablewriter import MarkdownTableWriter, LatexTableWriter
+def make_table(results: dict) -> str:
+    """Returns a markdown table from an evaluation results `dict`.
+
+    Args:
+        results (dict):
+            A dict of results as found in the `"table_results"` key of the
+            dictionary returned by `evaluate`.
+
+    Returns:
+        The markdown table of results as a string.
+    """
+    from pytablewriter import MarkdownTableWriter
 
     md_writer = MarkdownTableWriter()
-    latex_writer = LatexTableWriter()
     md_writer.headers = ["Task", "Prompt", "Version", "Metric", "Value", "", "Stderr"]
-    latex_writer.headers = [
-        "Task",
-        "Prompt",
-        "Version",
-        "Metric",
-        "Value",
-        "",
-        "Stderr",
-    ]
 
     values = []
-    for k, dic in result_dict["table_results"].items():
-        version = result_dict["versions"][k]
-        for m, v in dic.items():
+    for k, result_dict in results["table_results"].items():
+        version = results["versions"][k]
+        for m, v in result_dict.items():
             if m.endswith("_stderr"):
                 continue
             if "_name" in m:
                 continue
-            if m + "_stderr" in dic:
-                se = dic[m + "_stderr"]
+            if m + "_stderr" in result_dict:
+                se = result_dict[m + "_stderr"]
                 values.append(
                     [
-                        dic["task_name"],
-                        dic["prompt_name"],
+                        result_dict["task_name"],
+                        result_dict["prompt_name"],
                         version,
                         m,
                         "%.4f" % v,
@@ -354,8 +327,8 @@ def make_table(result_dict):
             else:
                 values.append(
                     [
-                        dic["task_name"],
-                        dic["prompt_name"],
+                        result_dict["task_name"],
+                        result_dict["prompt_name"],
                         version,
                         m,
                         "%.4f" % v,
@@ -363,12 +336,6 @@ def make_table(result_dict):
                         "",
                     ]
                 )
-            k = ""
             version = ""
     md_writer.value_matrix = values
-    latex_writer.value_matrix = values
-
-    # todo: make latex table look good
-    # print(latex_writer.dumps())
-
     return md_writer.dumps()
