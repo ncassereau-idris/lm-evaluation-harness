@@ -6,7 +6,7 @@ task (NLI), grounded in the medical history of patients.
 
 Homepage: https://physionet.org/content/mednli/1.0.0/
 """
-from lm_eval import BioTask
+from lm_eval.api.task import PromptSourceTask
 
 
 _CITATION = """
@@ -16,7 +16,7 @@ PhysioNet. https://doi.org/10.13026/C2RS98.
 """
 
 
-class MedNliBase(BioTask):
+class MedNliBase(PromptSourceTask):
     VERSION = 0
     DATASET_PATH = "lm_eval/datasets/biomedical/bigbio/biodatasets/mednli"
     DATASET_NAME = None
