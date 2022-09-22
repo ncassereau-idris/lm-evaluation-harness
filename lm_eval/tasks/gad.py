@@ -1,20 +1,24 @@
 """
+GAD Gene-Disease Associations
 
+Gene-disease associations curated from genetic association studies.
+
+Homepage: https://maayanlab.cloud/Harmonizome/dataset/GAD+Gene-Disease+Associations
 """
-import numpy as np
-from lm_eval.base import rf, BioTask
-from lm_eval.metrics import mean
+from lm_eval.api.task import PromptSourceTask
 
 
 _CITATION = """
-
+Becker, KG et al. (2004)
+The genetic association database.
+Nat Genet. 36:431-2.
 """
 
-class GadBase(BioTask):
+
+class GadBase(PromptSourceTask):
     VERSION = 0
     DATASET_PATH = "lm_eval/datasets/biomedical/bigbio/biodatasets/gad"
     DATASET_NAME = None
-    SPLIT = None
 
     def has_training_docs(self):
         return True
@@ -36,6 +40,7 @@ class GadBase(BioTask):
     def test_docs(self):
         if self.has_test_docs():
             return self.dataset["test"]
-          
+
+
 class GadTEXT(GadBase):
     DATASET_NAME = "gad_blurb_bigbio_text"

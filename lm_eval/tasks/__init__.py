@@ -205,6 +205,12 @@ TASK_REGISTRY = {
     # TyDi QA
     "tydiqa_primary": tydiqa.TyDiQAPrimaryClassification,
     "tydiqa_secondary": tydiqa.TyDiQAGoldPGeneration,
+    # BigBio
+    "scitail": scitail.SciTailTE,
+    "bioasq_task_b": bioasq_task_b.BioAsqQA,
+    "biosses": biosses.BiossesPAIRS,
+    "gad": gad.GadTEXT,
+    "mednli": mednli.MedNliTE,
     #######################################################
     # TODO: Not Yet Available in `promptsource/eval-hackathon`
     ########################################################
@@ -213,13 +219,6 @@ TASK_REGISTRY = {
     # "mlsum_de": gem_mlsum.GEMMLSUMDe,
     # "mlsum_es_covid_challenge_set": gem_mlsum.GEMMLSUMEsChallgeTestCovid,
     # "mlsum_de_covid_challenge_set": gem_mlsum.GEMMLSUMDeChallgeTestCovid,
-    #######################################################
-    # BigBio
-    "scitail": scitail.SciTailTE,
-    "bioasq_task_b": bioasq_task_b.BioAsqQA,
-    "biosses": biosses.BiossesPAIRS,
-    "gad": gad.GadTEXT,
-    "mednli": mednli.MedNliTE,
     ########################################################
     # TODO: Tasks That Require Manual Download:
     ########################################################

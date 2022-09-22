@@ -24,7 +24,6 @@ install_requires = [
     "transformers@git+https://github.com/huggingface/transformers@main",
     "promptsource@git+https://github.com/bigscience-workshop/promptsource@eval-hackathon",
     "bigbio@git+https://github.com/bigscience-workshop/biomedical.git@main",
-
 ]
 dependency_links = []
 
