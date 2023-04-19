@@ -35,6 +35,7 @@ from . import superglue
 from . import tydiqa
 from . import wino_bias
 from . import wmt
+from . import xnli
 from . import xquad
 
 
@@ -147,6 +148,9 @@ TASK_REGISTRY = {
     # Bias-Shades
     # Format: `bias_shades_{lang}`
     **bias_shades.construct_tasks(),
+    # XNLI
+    # Format: `xnli_{lang}`
+    **xnli.construct_tasks(),
     # BLiMP
     "blimp_adjunct_island": blimp.BlimpAdjunctIsland,
     "blimp_anaphor_gender_agreement": blimp.BlimpAnaphorGenderAgreement,
