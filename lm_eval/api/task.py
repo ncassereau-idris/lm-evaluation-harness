@@ -222,7 +222,8 @@ class PromptSourceTask(Task):
     """
 
     CONFIGURED_RANKED_CHOICE_PS_METRICS = {"Accuracy"}
-    CONFIGURED_GENERATION_PS_METRICS = {"BLEU", "ROUGE", "SARI"}
+    CONFIGURED_GENERATION_PS_METRICS = {"BLEU", "ROUGE", "SARI", "fuzzy_list_p",
+                                        "fuzzy_list_r", "fuzzy_list_f"}
     SPLIT = None
 
     def __init__(
@@ -556,6 +557,12 @@ class PromptSourceTask(Task):
                     out = {**out, **rouge_scores}
                 elif metric == "SARI":
                     out["sari"] = sari(self.doc_to_rawtext(doc), pred, target)
+                elif metric == "fuzzy_list_p":
+                    out["fuzzy_list_p"] = (target, pred)
+                elif metric == "fuzzy_list_r":
+                    out["fuzzy_list_r"] = (target, pred)
+                elif metric == "fuzzy_list_f":
+                    out["fuzzy_list_f"] = (target, pred)
 
         # TODO: Wrap process results s.t. override impl do not
         # override the save examples.

@@ -10,11 +10,11 @@ from typing import List, Mapping, Optional
 
 from lm_eval.metrics import sari as sari_impl
 
-
 logger = logging.getLogger(__name__)
 
 
 def mean(arr):
+    print(arr)
     return sum(arr) / len(arr)
 
 
