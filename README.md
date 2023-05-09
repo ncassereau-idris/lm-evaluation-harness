@@ -159,3 +159,15 @@ To implement a new task in eval harness, follow the [`PromptSourceTask` template
 ## Using load_from_disk instead of load_dataset
 
 You can use load_from_disk (convenient on Jean Zay supercomputer) by setting `task_args download_mode='load_from_disk',data_dir=<data/path>`
+
+
+## Using Deepspeed Inference
+
+This feature was added to support the use of Deepspeed Inference on Jean Zay supercomputer. It is not tested on other platforms. It was also only implemented for BLOOM Models. To use it, you need to install Deepspeed Inference. It can be activated by passing `use_accelerate=True` and `dtype=float16` to the `--model_args` flag, respectively
+
+```bash
+deepspeed --num_gpus 8 main.py \
+    --model_api_name 'hf-causal' \
+    --model_args use_deepspeed=True,dtype=float16,pretrained='bloomz' \
+    --task_name wnli
+```
