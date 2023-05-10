@@ -45,12 +45,13 @@ class PostInstall(install):
 setup(
     name="lm_eval",
     version="0.2.0",
-    author="Leo Gao & EleutherAI",
+    author="Leo Gao & EleutherAI / Fork by IDRIS",
     description="A framework for evaluating autoregressive language models",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/EleutherAI/lm-evaluation-harness",
+    url="https://github.com/ncassereau-idris/lm-evaluation-harness",
     packages=find_packages(),
+    scripts=['scripts/lm_eval'],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
