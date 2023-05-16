@@ -163,7 +163,7 @@ You can use load_from_disk (convenient on Jean Zay supercomputer) by setting `ta
 
 ## Using Deepspeed Inference
 
-This feature was added to support the use of Deepspeed Inference on Jean Zay supercomputer. It is not tested on other platforms. It was also only implemented for BLOOM Models. To use it, you need to install Deepspeed Inference. It can be activated by passing `use_accelerate=True` and `dtype=float16` to the `--model_args` flag, respectively
+This feature was added to support the use of Deepspeed Inference on Jean Zay supercomputer. It is not tested on other platforms. It was also only implemented for BLOOM Models. To use it, you need to install Deepspeed Inference. It can be activated by passing `use_deepspeed=True` and `dtype=float16` to the `--model_args` flag, respectively
 
 ```bash
 deepspeed --num_gpus 8 main.py \
