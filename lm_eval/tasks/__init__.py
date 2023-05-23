@@ -37,12 +37,14 @@ from . import wino_bias
 from . import wmt
 from . import xnli
 from . import xquad
+from . import wikiner_fr
 
 
 logger = logging.getLogger(__name__)
 
 
 TASK_REGISTRY = {
+    "wikiner_fr": wikiner_fr.WikiNER_fr,
     # GLUE
     "cola": glue.CoLA,
     "mnli": glue.MNLI,
