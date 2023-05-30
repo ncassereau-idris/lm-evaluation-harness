@@ -2,6 +2,7 @@
 import re
 from functools import partial
 
+
 def make_list(text_list):
     if '\n' in text_list:
         tabline = text_list.split('\n')
@@ -11,13 +12,16 @@ def make_list(text_list):
         tabline = text_list.split(',')
     return tabline
 
+
 def clean_element(element):
     element = re.sub("[\"'«»“”    ]+$", "", re.sub("^[\"'«»“”    ]+", "", element))
     element = element.strip()
     return element
 
+
 def clean_up_list_elements(list_to_clean):
     return [x for x in set([clean_element(x) for x in list_to_clean]) if x != '']
+
 
 def score(scoring_func, items):
     """
@@ -37,6 +41,7 @@ def score(scoring_func, items):
         tot_num += num_examples
     return tot_score/num_examples
 
+
 def fscore(precision_func, recall_func, items):
     p = score(precision_func, items)
     r = score(recall_func, items)
@@ -45,11 +50,13 @@ def fscore(precision_func, recall_func, items):
     else:
         return (2 * p * r) / (p + r)
 
+
 def sent_precision(ref_list, pred_list):
     if len(pred_list) == 0:
         return 0, 0
     else:
         return 1, float(len([x for x in pred_list if x in ref_list]))/len(pred_list)
+
 
 def sent_recall(ref_list, pred_list):
     if len(ref_list) == 0:
@@ -57,11 +64,13 @@ def sent_recall(ref_list, pred_list):
     else:
         return 1, float(len([x for x in ref_list if x in pred_list]))/len(ref_list)
 
+
 def precision(ref_list, pred_list):
     if len(pred_list) == 0:
         return 0, 0
     else:
         return len(pred_list), float(len([x for x in pred_list if x in ref_list]))
+
 
 def recall(ref_list, pred_list):
     if len(ref_list) == 0:

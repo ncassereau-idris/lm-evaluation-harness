@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 def mean(arr):
-    print(arr)
     return sum(arr) / len(arr)
 
 

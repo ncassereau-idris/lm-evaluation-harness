@@ -3,6 +3,8 @@ import logging
 import re
 from abc import abstractmethod
 from typing import Callable, List, Mapping, Optional, Tuple, Union
+from functools import partial
+
 
 import datasets
 import numpy as np
@@ -18,6 +20,8 @@ from lm_eval.api.metric import (
     weighted_perplexity,
 )
 from lm_eval.api.request import Request, rf
+
+from lm_eval.metrics import fuzzy_list_comparison
 
 logger = logging.getLogger(__name__)
 
@@ -602,6 +606,12 @@ class PromptSourceTask(Task):
                 out["rougeLsum_fmeasure"] = mean
             elif metric == "SARI":
                 out["sari"] = mean
+            elif metric == "fuzzy_list_p":
+                out["fuzzy_list_p"] = partial(fuzzy_list_comparison.score, fuzzy_list_comparison.precision)
+            elif metric == "fuzzy_list_r":
+                out["fuzzy_list_r"] = partial(fuzzy_list_comparison.score, fuzzy_list_comparison.recall)
+            elif metric == "fuzzy_list_f":
+                out["fuzzy_list_f"] = partial(fuzzy_list_comparison.fscore, fuzzy_list_comparison.precision, fuzzy_list_comparison.recall)
         return out
 
     def higher_is_better(self) -> Mapping[str, bool]:

@@ -10,23 +10,8 @@ Spanish,Dutch, Portuguese and Russian. This is the French portion of the dataset
 Homepage: https://github.com/afshinrahimi/mmner
 
 """
-import numpy as np
-import sklearn
-import transformers.data.metrics.squad_metrics as squad_metrics
-from typing import Callable, List, Mapping, Optional, Tuple, Union
-from functools import partial
-from lm_eval.api.metric import (
-    bits_per_byte,
-    bleu,
-    mean,
-    rouge,
-    sari,
-    weighted_perplexity,
-)
 
 from lm_eval.api.task import PromptSourceTask
-from lm_eval.metrics import fuzzy_list_comparison
-
 
 _CITATION = """
 @article{NOTHMAN2013151,
@@ -71,17 +56,3 @@ class WikiNER_fr(PromptSourceTask):
 
     def max_generation_length(self):
         return 512
-
-    def aggregation(self) -> Mapping[str, Callable]:
-        out = {}
-        for metric in self.prompt_template.metadata.metrics:
-            if metric == "fuzzy_list_p":
-                out["fuzzy_list_p"] = partial(fuzzy_list_comparison.score, fuzzy_list_comparison.precision)
-            elif metric == "fuzzy_list_r":
-                out["fuzzy_list_r"] = partial(fuzzy_list_comparison.score, fuzzy_list_comparison.recall)
-            elif metric == "fuzzy_list_f":
-                out["fuzzy_list_f"] = partial(fuzzy_list_comparison.fscore, fuzzy_list_comparison.precision, fuzzy_list_comparison.recall)
-        return out
-
-
-
