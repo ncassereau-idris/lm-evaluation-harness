@@ -38,6 +38,7 @@ from . import wmt
 from . import xnli
 from . import xquad
 from . import wikiner_fr
+from . import quaerofrenchmed
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 TASK_REGISTRY = {
     "wikiner_fr": wikiner_fr.WikiNER_fr,
+    "quaerofrenchmed": quaerofrenchmed.QuaeroFrenchMed,
     # GLUE
     "cola": glue.CoLA,
     "mnli": glue.MNLI,
