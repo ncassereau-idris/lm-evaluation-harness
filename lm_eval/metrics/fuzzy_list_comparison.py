@@ -39,7 +39,7 @@ def score(scoring_func, items):
         num_examples, score = scoring_func(ref_list, pred_list)
         tot_score += score
         tot_num += num_examples
-    return tot_score/num_examples
+    return tot_score/tot_num
 
 
 def fscore(precision_func, recall_func, items):
