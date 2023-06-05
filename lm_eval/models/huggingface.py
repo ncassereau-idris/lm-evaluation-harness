@@ -3,7 +3,6 @@ import math
 import torch
 import torch.nn.functional as F
 import transformers
-import deepspeed
 from typing import List, Mapping, NewType, Optional, Tuple, Union
 from tqdm import tqdm
 
@@ -206,6 +205,7 @@ class HuggingFaceAutoLM(TokenLM):
         """Returns a pre-trained pytorch model from a pre-trained model configuration."""
         if self.use_deepspeed:
             # Deepspeed iniatilization
+            import deepspeed
             world_size = int(os.getenv("WORLD_SIZE", "1"))
             deepspeed.init_distributed("nccl")
 
