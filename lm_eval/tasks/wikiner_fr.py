@@ -55,4 +55,4 @@ class WikiNER_fr(PromptSourceTask):
             return self.dataset["test"]
 
     def max_generation_length(self):
-        return 512
+        return 64
