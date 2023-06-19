@@ -54,3 +54,8 @@ class QuaeroFrenchMed(PromptSourceTask):
 
     def max_generation_length(self):
         return 32
+
+    def invalid_doc_for_prompt(self, doc) -> bool:
+        if self.doc_to_target(doc) == [""]:
+            return True
+        return False
