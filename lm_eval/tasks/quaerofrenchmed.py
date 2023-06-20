@@ -26,10 +26,10 @@ _CITATION = """
 """
 
 
-class QuaeroFrenchMed(PromptSourceTask):
+class QuaeroFrenchMed_EMEA(PromptSourceTask):
     VERSION = 0
     DATASET_PATH = "meczifho/QuaeroFrenchMed"
-    DATASET_NAME = ""
+    DATASET_NAME = "EMEA"
 
     def has_training_docs(self):
         return True
@@ -59,3 +59,38 @@ class QuaeroFrenchMed(PromptSourceTask):
         if self.doc_to_target(doc) == [""]:
             return True
         return False
+
+class QuaeroFrenchMed_MEDLINE(PromptSourceTask):
+    VERSION = 0
+    DATASET_PATH = "meczifho/QuaeroFrenchMed"
+    DATASET_NAME = "MEDLINE"
+
+    def has_training_docs(self):
+        return True
+
+    def has_validation_docs(self):
+        return False
+
+    def has_test_docs(self):
+        return True
+
+    def training_docs(self):
+        if self.has_training_docs():
+            return self.dataset["train"]
+
+    def validation_docs(self):
+        if self.has_validation_docs():
+            return self.dataset["validation"]
+
+    def test_docs(self):
+        if self.has_test_docs():
+            return self.dataset["test"]
+
+    def max_generation_length(self):
+        return 32
+
+    def invalid_doc_for_prompt(self, doc) -> bool:
+        if self.doc_to_target(doc) == [""]:
+            return True
+        return False
+

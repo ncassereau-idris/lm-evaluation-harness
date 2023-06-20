@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 
 TASK_REGISTRY = {
     "wikiner_fr": wikiner_fr.WikiNER_fr,
-    "quaerofrenchmed": quaerofrenchmed.QuaeroFrenchMed,
+    "quaerofrenchmed_emea": quaerofrenchmed.QuaeroFrenchMed_EMEA,
+    "quaerofrenchmed_medline": quaerofrenchmed.QuaeroFrenchMed_MEDLINE,
     # GLUE
     "cola": glue.CoLA,
     "mnli": glue.MNLI,
