@@ -39,7 +39,10 @@ def score(scoring_func, items):
         num_examples, score = scoring_func(ref_list, pred_list)
         tot_score += score
         tot_num += num_examples
-    return tot_score/tot_num
+    if tot_num == 0:
+        return float("nan")
+    else:
+        return tot_score / tot_num
 
 
 def fscore(precision_func, recall_func, items):
@@ -51,29 +54,9 @@ def fscore(precision_func, recall_func, items):
         return (2 * p * r) / (p + r)
 
 
-def sent_precision(ref_list, pred_list):
-    if len(pred_list) == 0:
-        return 0, 0
-    else:
-        return 1, float(len([x for x in pred_list if x in ref_list]))/len(pred_list)
-
-
-def sent_recall(ref_list, pred_list):
-    if len(ref_list) == 0:
-        return 0, 0
-    else:
-        return 1, float(len([x for x in ref_list if x in pred_list]))/len(ref_list)
-
-
 def precision(ref_list, pred_list):
-    if len(pred_list) == 0:
-        return 0, 0
-    else:
-        return len(pred_list), float(len([x for x in pred_list if x in ref_list]))
+    return len(pred_list), float(len([x for x in pred_list if x in ref_list]))
 
 
 def recall(ref_list, pred_list):
-    if len(ref_list) == 0:
-        return 0, 0
-    else:
-        return len(ref_list), float(len([x for x in ref_list if x in pred_list]))
+    return len(ref_list), float(len([x for x in ref_list if x in pred_list]))
