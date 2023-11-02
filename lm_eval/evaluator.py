@@ -34,6 +34,9 @@ def cli_evaluate(
     bootstrap_iters: Optional[int] = 100000,
     seed: Optional[int] = DEFAULT_SEED,
     limit: Optional[int] = None,
+    idx_start: Optional[int] = None,
+    idx_end: Optional[int] = None,
+    
 ) -> dict:
     """Evaluate a model from an api on a given task with multiple possible prompt
     formats. This is effectively a wrapper around `evaluate` for command-line
@@ -70,6 +73,10 @@ def cli_evaluate(
             shuffling, few-shot prompt selection, and framework seeding.
         limit (int, optional, defaults to None):
             Limit the number of examples per task (only use this for testing).
+        idx_start (int, optional, defaults to None):
+            Starting index for slicing the input.
+        idx_end (int, optional, defaults to None):
+            Ending index for slicing the input.
 
     Returns:
         Dictionary of results.
@@ -94,6 +101,8 @@ def cli_evaluate(
         bootstrap_iters=bootstrap_iters,
         seed=seed,
         limit=limit,
+        idx_start=idx_start,
+        idx_end=idx_end,
     )
 
     # Add info about the model and few shot config.
@@ -108,6 +117,8 @@ def cli_evaluate(
         "limit": limit,
         "bootstrap_iters": bootstrap_iters,
         "seed": seed,
+        "idx_start": idx_start,
+        "idx_end": idx_end,
     }
     return results
 
@@ -120,6 +131,8 @@ def evaluate(
     bootstrap_iters: Optional[int] = 100000,
     seed: Optional[int] = DEFAULT_SEED,
     limit: Optional[int] = None,
+    idx_start: Optional[int] = None,
+    idx_end: Optional[int] = None,
 ) -> dict:
     """Instantiate and evaluate a model on a list of tasks.
 
@@ -138,6 +151,10 @@ def evaluate(
         limit (int, optional, defaults to None):
             Limit the number of examples per task.
             WARNING: This is only for testing purposes.
+        idx_start (int, optional, defaults to None):
+            Starting index for slicing the input.
+        idx_end (int, optional, defaults to None):
+            Ending index for slicing the input.
 
     Returns:
         Dictionary of results.
@@ -217,7 +234,7 @@ def evaluate(
         # could also implement some kind of auto-grouping here; they should
         # end up next to each other.
         logger.info(f"\n» Running all `{reqtype}` requests")
-        resps = getattr(model, reqtype)([req.args for req in reqs])
+        resps = getattr(model, reqtype)([req.args for req in reqs], idx_start, idx_end)
         resps = [
             x if req.index is None else x[req.index] for x, req in zip(resps, reqs)
         ]

@@ -28,6 +28,18 @@ def parse_args():
         "`key1=value1,key2=value2`, with no spaces",
     )
     parser.add_argument(
+        "--idx_start",
+        type=int,
+        default=None,
+        help="Starting index for slicing the input",
+    )
+    parser.add_argument(
+        "--idx_end",
+        type=int,
+        default=None,
+        help="Ending index for slicing the input",
+    )
+    parser.add_argument(
         "--task_name",
         required=True,
         help="Name of the task to use as found "
@@ -195,6 +207,8 @@ def main():
         bootstrap_iters=args.bootstrap_iters,
         seed=args.seed,
         limit=args.limit,
+        idx_start=args.idx_start,
+        idx_end=args.idx_end,
     )
     if args.no_tracking:
         results = evaluator.cli_evaluate(**evaluate_args)

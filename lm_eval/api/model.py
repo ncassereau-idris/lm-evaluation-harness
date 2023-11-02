@@ -402,10 +402,21 @@ class CachingLM:
         lm.set_cache_hook(self.get_cache_hook())
 
     def __getattr__(self, attr):
-        def fn(requests):
+        def fn(requests, idx_start, idx_end):
             res = []
             remaining_reqs = []
-
+            
+            # Slice the requests if necessary
+            if idx_start is not None:
+                if idx_end is not None:
+                    if idx_end < idx_start:
+                        raise ValueError("idx_end must be greater than or equal to idx_start")
+                    if idx_end > len(requests):
+                        raise ValueError("idx_end must be less than or equal to the length of the dataset")
+                    requests = requests[idx_start:idx_end]
+                else:
+                    requests = requests[idx_start:]
+                    
             # Figure out which ones are cached and which ones are new
             for req in requests:
                 hsh = hash_args(attr, req)
