@@ -334,11 +334,21 @@ class HuggingFaceAutoLM(TokenLM):
     def tok_decode(self, tokens: torch.LongTensor) -> List[str]:
         return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
 
-    def greedy_until(self, requests: List[Tuple[str, dict]]) -> List[str]:
+    def greedy_until(self, requests: List[Tuple[str, dict]], idx_start: int=None, idx_end: int=None) -> List[str]:
         def _collate(x):
             tokens = self.tok_encode(x[0])
             return len(tokens), x[0]
-
+        
+        # Slice the requests if necessary
+        if idx_start is not None:
+            if idx_end is not None:
+                if idx_end < idx_start:
+                    raise ValueError("idx_end must be greater than or equal to idx_start")
+                if idx_end > len(requests):
+                    raise ValueError("idx_end must be less than or equal to the length of the dataset")
+                requests = requests[idx_start:idx_end]
+            else:
+                requests = requests[idx_start:]
         results = []
         reorder = utils.Reorderer(requests, _collate)
         for chunk in utils.chunks(

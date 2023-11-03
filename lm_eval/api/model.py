@@ -86,8 +86,9 @@ class LM(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def greedy_until(self, requests: List[Tuple[str, dict]]) -> List[str]:
+    def greedy_until(self, requests: List[Tuple[str, dict]], idx_start : int=None, idx_end : int=None) -> List[str]:
         """Generate greedily until a stopping sequence or max generation length.
+           The idx_start and idx_end arguments are used to slice the input.
 
         Args:
             requests (List[Tuple[str, dict]]):
@@ -101,6 +102,10 @@ class LM(abc.ABC):
                         max_generation_length: int,
                         num_fewshot: int
                     }
+            idx_start (int):
+                Starting index for slicing the input
+            idx_end (int):
+                Ending index for slicing the input
 
         Returns:
             A list of strings continuation:
