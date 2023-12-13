@@ -60,3 +60,26 @@ def precision(ref_list, pred_list):
 
 def recall(ref_list, pred_list):
     return len(ref_list), float(len([x for x in ref_list if x in pred_list]))
+
+
+if __name__ == '__main__':
+    import json
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('output_file')
+    args = parser.parse_args()
+
+    refs, preds = [], []
+    with open(args.output_file) as fp:
+        for line in fp:
+            dict_output = json.loads(line)
+            preds.append(dict_output['pred'])
+            assert len(dict_output['target']) == 1
+            refs.append(dict_output['target'])
+    p = score(precision, list(zip(refs, preds)))
+    r = score(recall, list(zip(refs, preds)))
+    f = fscore(precision, recall, list(zip(refs, preds)))
+    print('Precision  =', p)
+    print('Recall  =', r)
+    print('F-score  =', f)
+    
