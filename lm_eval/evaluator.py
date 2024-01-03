@@ -34,6 +34,8 @@ def cli_evaluate(
     bootstrap_iters: Optional[int] = 100000,
     seed: Optional[int] = DEFAULT_SEED,
     limit: Optional[int] = None,
+    idx_start: Optional[int] = None,
+    idx_end: Optional[int] = None,    
 ) -> dict:
     """Evaluate a model from an api on a given task with multiple possible prompt
     formats. This is effectively a wrapper around `evaluate` for command-line
@@ -70,6 +72,10 @@ def cli_evaluate(
             shuffling, few-shot prompt selection, and framework seeding.
         limit (int, optional, defaults to None):
             Limit the number of examples per task (only use this for testing).
+        idx_start (int, optional, defaults to None):
+            Starting index for slicing the dataset.
+        idx_end (int, optional, defaults to None):
+            Ending index for slicing the dataset.
 
     Returns:
         Dictionary of results.
@@ -94,6 +100,8 @@ def cli_evaluate(
         bootstrap_iters=bootstrap_iters,
         seed=seed,
         limit=limit,
+        idx_start=idx_start,
+        idx_end=idx_end,
     )
 
     # Add info about the model and few shot config.
@@ -108,6 +116,8 @@ def cli_evaluate(
         "limit": limit,
         "bootstrap_iters": bootstrap_iters,
         "seed": seed,
+        "idx_start": idx_start,
+        "idx_end": idx_end,
     }
     return results
 
@@ -120,6 +130,8 @@ def evaluate(
     bootstrap_iters: Optional[int] = 100000,
     seed: Optional[int] = DEFAULT_SEED,
     limit: Optional[int] = None,
+    idx_start: Optional[int] = None,
+    idx_end: Optional[int] = None,
 ) -> dict:
     """Instantiate and evaluate a model on a list of tasks.
 
@@ -183,8 +195,15 @@ def evaluate(
         logger.info(f"\n» Constructing '{task_template_key}' contexts and requests")
         pbar_limit = len(task_docs) if not limit else np.minimum(limit, len(task_docs))
 
+        # set idx_start and idx_end to 0 and len(task_docs) respectively if None
+        if idx_start is None:
+            idx_start = 0
+        if idx_end is None:
+            idx_end = len(task_docs)
+
+        num = -1
         for doc_id, doc in enumerate(
-            tqdm(itertools.islice(task_docs, 0, limit), total=pbar_limit)
+            tqdm(itertools.islice(task_docs, 0, pbar_limit), total=pbar_limit)
         ):
             docs[(task_template_key, doc_id)] = doc
             ctx, fewshotex_logging_info = task.fewshot_context(
@@ -192,6 +211,16 @@ def evaluate(
                 num_fewshot=num_fewshot,
                 rng=rng,
             )
+            num += 1
+            # ignore any predictions that are outside the specified indices
+            # whilst maintaining the original loop (so that few-shot examples
+            # are selected in the same order as for the whole dataset)
+            # idx_start andn idx_end are set just before the loop (value of
+            # self.idx_start and self.idx_end if not None otherwise 0 and
+            # len(task_docs) respectively.
+            if num < idx_start or num > idx_end - 1:
+                continue
+            
             fewshotex_logging_info["doc_id"] = doc["doc_id"]
             args = {"num_fewshot": num_fewshot}
             reqs = task.construct_requests(doc, ctx, args)
